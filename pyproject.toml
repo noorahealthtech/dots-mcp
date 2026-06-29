@@ -1,0 +1,35 @@
+[project]
+name = "dots-kms-mcp"
+version = "0.1.0"
+description = "MCP server wrapping the Noora KMS getData discovery API for chat-based knowledge queries."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Noora Health" }]
+dependencies = [
+    # Pin to the v1 line: a 2.0 alpha exists that may relocate the FastMCP import.
+    "mcp[cli]>=1.28,<2",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+dots-kms-mcp = "dots_kms_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dots_kms_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

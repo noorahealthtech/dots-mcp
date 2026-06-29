@@ -1,0 +1,20 @@
+# Secrets & local config — NEVER commit these
+.env
+kms_schema.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# uv / venv
+.venv/
+uv.lock.bak
+
+# OS
+.DS_Store
+
+# The saved API doc (Noora KMS.html) stays for reference; ignore its bulky asset dump
+Noora KMS_files/

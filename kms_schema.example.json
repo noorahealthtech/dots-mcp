@@ -1,0 +1,47 @@
+{
+  "_comment": "Local, developer-maintained description of what is queryable in your KMS tenant. The getData API has no live discovery endpoint, so this file is the source of truth for content/profile/tag types and for cached tag name -> ObjectId mappings used by filters. Copy this to kms_schema.json (or point KMS_SCHEMA_PATH at your own) and edit. Values seeded here are illustrative examples taken from the API documentation.",
+  "content_types": [
+    { "id": "articles", "name": "Articles", "description": "Long-form knowledge articles." },
+    { "id": "stories", "name": "Stories", "description": "Field stories, often with an author reference at meta.kp_contributed_by." },
+    { "id": "reports", "name": "Reports", "description": "Reports and structured documents." }
+  ],
+  "profile_types": [
+    { "id": "volunteers", "name": "Volunteers", "description": "Volunteer user profiles. Often tagged with locations like states." },
+    { "id": "coreTeam", "name": "Core Team", "description": "Core team member profiles." },
+    { "id": "researchers", "name": "Researchers", "description": "Researcher profiles." }
+  ],
+  "tag_types": [
+    {
+      "id": "countries",
+      "name": "Countries",
+      "name_path": "meta.title",
+      "description": "Country tags. Content can be tagged with countries.",
+      "values": {
+        "India": "607f1f77bcf86cd799439011"
+      }
+    },
+    {
+      "id": "states",
+      "name": "States",
+      "name_path": "meta.title",
+      "description": "State tags (e.g. for rollups: cities -> states -> countries).",
+      "values": {
+        "Karnataka": "673d8531d6ef55f9b7958e6d"
+      }
+    },
+    {
+      "id": "cities",
+      "name": "Cities",
+      "name_path": "meta.title",
+      "description": "City tags. Content is often tagged at the city level.",
+      "values": {}
+    },
+    {
+      "id": "category",
+      "name": "Category",
+      "name_path": "meta.title",
+      "description": "Content category tags.",
+      "values": {}
+    }
+  ]
+}
