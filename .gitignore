@@ -2,6 +2,9 @@
 .env
 kms_schema.json
 
+# Local reference / scratch — not part of the project
+tmp/
+
 # Python
 __pycache__/
 *.py[cod]
