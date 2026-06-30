@@ -42,7 +42,9 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
   **`date_query()`**, `merge_find_query()`. `tag_filter()`/`date_range_filter()` are DEPRECATED
   (activeFilters shape — rejected by the live API).
 - `schema.py` — loads the developer-maintained `kms_schema.json`; `extract_doc_tag_ids()`
-  (best-effort tag `_id`s, for `related_documents`).
+  (best-effort tag `_id`s, for `related_documents`); **`extract_doc_attachments()`** (structural
+  walk pulling PDF/image/video/link attachments, PDF-first, deduped) + **`document_citation()`**
+  (web-app deep link `{KMS_WEB_URL}/published-page/{contentType}?id={_id}`).
 - `scripts/build_schema.py` — regenerates `kms_schema.json` from the live tenant (content types +
   counts + harvested tag `values`). Re-run to refresh.
 - `settings.py` — `Settings.from_env()`; auto-mock when creds absent.
@@ -74,6 +76,13 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
   `content_types`).
 - **`createdAt` doesn't exist** in this data — date filtering uses `kp_date_created`
   (`compare_regions` defaults to it).
+- **Citations are always-on:** every document-returning tool annotates each doc with a
+  `source_url` (cite it). `include_attachments=True` (and the `document_attachments` tool)
+  add an `attachments` list. The FastMCP `instructions` + prompts steer the model to cite
+  sources as clickable links. Attachments come in two shapes — GCS upload objects
+  (`kind:"storage#object"`, with a directly-openable `publicUrl`) and external link
+  objects/strings — handled structurally (field names vary per content type). Web base is
+  `KMS_WEB_URL` (default `https://knowledge.noorahealth.org`).
 - **Tools catch `KmsError` and re-raise as `ValueError`** with a readable message so the model
   sees a recoverable tool error.
 - Mock mode is automatic when `KMS_AUTH_TOKEN`/`KMS_TENANT` are unset (override with `KMS_MOCK`).

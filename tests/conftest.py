@@ -29,6 +29,7 @@ def live_settings() -> Settings:
         token="TEST_TOKEN",
         tenant="TEST_TENANT",
         base_url="https://api.example.test",
+        web_url="https://web.example.test",
         mock=False,
         schema_path=None,
         timeout=5.0,

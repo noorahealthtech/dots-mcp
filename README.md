@@ -118,6 +118,24 @@ Values within a list are OR'd; collections are AND'd. `list_tag_types` shows val
 values per collection (and which content types carry each — vocabularies differ by
 type). `search_by_tag_name` and `compare_regions` are one-step convenience wrappers.
 
+### Citations & attachments
+
+**Every returned document carries a `source_url`** — a clickable deep link to its page in
+the KMS web app (`{KMS_WEB_URL}/published-page/{content_type}?id={_id}`, default base
+`https://knowledge.noorahealth.org`, override with `KMS_WEB_URL`). The server steers the
+model to cite sources as clickable links in every answer.
+
+**Attachments** (uploaded PDFs/images/videos + external Drive/Docs links) are extracted on
+demand:
+
+- pass `include_attachments=true` to `search_knowledge` / `get_document` / `get_documents`
+  / `collect` → each doc gains an `attachments` list, OR
+- call **`document_attachments(content_type, document_id, kinds=["pdf"])`** for just one
+  document's files.
+
+Each attachment is `{kind: "pdf"|"image"|"video"|"file"|"link", filename, url, content_type,
+size}`, **PDFs first**. Uploaded-file `url`s are directly downloadable (public GCS links).
+
 ## Run & inspect
 
 ```bash

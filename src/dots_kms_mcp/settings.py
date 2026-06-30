@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 DEFAULT_BASE_URL = "https://okf-be-prod-dot-ok-framework.el.r.appspot.com"
+# Web-app base for human-facing citation deep links (separate from the API host).
+DEFAULT_WEB_URL = "https://knowledge.noorahealth.org"
 GETDATA_PATH = "/api/discovery/getData"
 DEFAULT_TIMEOUT = 30.0
 
@@ -48,6 +50,7 @@ class Settings:
     token: str | None
     tenant: str | None
     base_url: str
+    web_url: str
     mock: bool
     schema_path: str | None
     timeout: float
@@ -65,6 +68,7 @@ class Settings:
         token = (os.environ.get("KMS_AUTH_TOKEN") or "").strip() or None
         tenant = (os.environ.get("KMS_TENANT") or "").strip() or None
         base_url = (os.environ.get("KMS_BASE_URL") or "").strip() or DEFAULT_BASE_URL
+        web_url = (os.environ.get("KMS_WEB_URL") or "").strip() or DEFAULT_WEB_URL
         schema_path = (os.environ.get("KMS_SCHEMA_PATH") or "").strip() or None
 
         timeout_raw = (os.environ.get("KMS_TIMEOUT") or "").strip()
@@ -85,6 +89,7 @@ class Settings:
             token=token,
             tenant=tenant,
             base_url=base_url,
+            web_url=web_url,
             mock=mock,
             schema_path=schema_path,
             timeout=timeout,

@@ -19,6 +19,8 @@ from .errors import KmsError
 from .getdata_client import build_client
 from .schema import (
     _cached_schema,
+    document_citation,
+    extract_doc_attachments,
     extract_doc_tag_ids,
     find_tag_type,
     get_content_types,
@@ -27,7 +29,17 @@ from .schema import (
 )
 from .settings import Settings
 
-mcp = FastMCP("dots-kms")
+mcp = FastMCP(
+    "dots-kms",
+    instructions=(
+        "Every document returned by these tools includes a `source_url` — a clickable link "
+        "to that document's page in the KMS web app — and, when include_attachments is set "
+        "or via document_attachments, an `attachments` list of file URLs (PDFs, images, "
+        "links). ALWAYS cite your sources: when you state something from a document, link to "
+        "its source_url (and relevant attachments) as clickable markdown links so the user "
+        "can verify it. Never invent a source_url; only use ones present in tool results."
+    ),
+)
 
 # Resolve settings + client + schema once at import time. Settings.from_env logs
 # the chosen mode (mock vs live) to stderr.
@@ -46,6 +58,35 @@ def _raise_readable(exc: KmsError) -> NoReturn:
     """Re-raise a KMS error as a ValueError the model can read and recover from."""
     detail = getattr(exc, "detail", None) or str(exc)
     raise ValueError(detail) from exc
+
+
+def _annotate(
+    doc: Any, content_type: str | None = None, include_attachments: bool = False
+) -> Any:
+    """Add a citation `source_url` (always) and `attachments` (opt-in) to a document."""
+    if not isinstance(doc, dict):
+        return doc
+    url = document_citation(doc, content_type, _settings.web_url)
+    if url:
+        doc["source_url"] = url
+    if include_attachments:
+        doc["attachments"] = extract_doc_attachments(doc)
+    return doc
+
+
+def _annotate_result(
+    result: dict[str, Any], content_type: str | None = None, include_attachments: bool = False
+) -> dict[str, Any]:
+    """Annotate every document in a getData ``{"data": [...]}`` response in place."""
+    for doc in result.get("data") or []:
+        _annotate(doc, content_type, include_attachments)
+    return result
+
+
+def _ct_hint(content_types: list[str] | None) -> str | None:
+    """Use a single content type as the citation hint; if ambiguous, let each doc's
+    metadata.contentType decide."""
+    return content_types[0] if content_types and len(content_types) == 1 else None
 
 
 def _resolve_tag(tag_type: str, name: str) -> dict[str, Any]:
@@ -88,6 +129,7 @@ async def _collect(
     projection: dict[str, Any] | None = None,
     max_results: int = 50,
     page_size: int = 25,
+    include_attachments: bool = False,
 ) -> dict[str, Any]:
     """Auto-paginate getData up to ``max_results``. Shared by the collect tool and
     compare_regions. Honors the returned ``skip``; stops at the cap or last page.
@@ -125,8 +167,11 @@ async def _collect(
             f"[dots-kms-mcp] collect: truncated at {cap} of {total} total results.",
             file=sys.stderr,
         )
+    docs = collected[:cap]
+    for doc in docs:
+        _annotate(doc, _ct_hint(content_types), include_attachments)
     return {
-        "data": collected[:cap], "count": total,
+        "data": docs, "count": total,
         "pages_fetched": pages, "truncated": truncated,
     }
 
@@ -146,6 +191,7 @@ async def search_knowledge(
     limit: int | None = 10,
     skip: int = 0,
     count: bool = True,
+    include_attachments: bool = False,
     filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Search and filter the knowledge base. This is the primary query tool.
@@ -183,8 +229,13 @@ async def search_knowledge(
       mechanism is NOT supported by this tenant's API (returns HTTP 500) — use `tags`
       and `find_query` instead. Left here only for raw experimentation.
 
-    Returns {"data": [...documents], "count"?: int, "skip"?: int}.
-    For advanced options (population/joins, facet, aggregation), use query_getdata.
+    include_attachments: when true, each returned document also gets an `attachments`
+      list (PDFs/images/links with direct urls).
+
+    Returns {"data": [...documents], "count"?: int, "skip"?: int}. EVERY returned
+    document carries a `source_url` (its KMS web-app page) — cite it as a clickable
+    link when you use the document. For advanced options (population/joins, facet,
+    aggregation), use query_getdata.
     """
     try:
         if tags:
@@ -201,7 +252,8 @@ async def search_knowledge(
             skip=skip,
             count=count,
         )
-        return await _client.get_data(configs)
+        result = await _client.get_data(configs)
+        return _annotate_result(result, _ct_hint(content_types), include_attachments)
     except KmsError as exc:
         _raise_readable(exc)
 
@@ -212,15 +264,16 @@ async def get_document(
     content_type: str | None = None,
     profile_type: str | None = None,
     projection: dict[str, Any] | None = None,
+    include_attachments: bool = False,
 ) -> dict[str, Any]:
     """Fetch a single document by its _id.
 
     Provide the type the document belongs to: exactly one of content_type (e.g.
     "reports") or profile_type (e.g. "volunteers"). projection optionally limits
-    returned fields.
+    returned fields. include_attachments adds an `attachments` list (PDFs/images/links).
 
-    Returns {"document": {...}} when found, or {"document": None, "found": false}
-    when no document matches that id within the given type.
+    Returns {"document": {...}} when found (the document carries a `source_url` to its
+    KMS page — cite it), or {"document": None, "found": false} when no document matches.
     """
     try:
         configs = build_configs(
@@ -238,7 +291,7 @@ async def get_document(
     data = result.get("data") or []
     if not data:
         return {"document": None, "found": False, "document_id": document_id}
-    return {"document": data[0], "found": True}
+    return {"document": _annotate(data[0], content_type, include_attachments), "found": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -379,13 +432,15 @@ async def get_documents(
     profile_type: str | None = None,
     projection: dict[str, Any] | None = None,
     populate: list[dict[str, Any]] | None = None,
+    include_attachments: bool = False,
 ) -> dict[str, Any]:
     """Fetch several full documents by their _ids in one call.
 
     Provide the type they belong to (one of content_type / profile_type) and a list of
     document_ids. `populate` optionally expands reference fields (joins), e.g.
-    [{"path": "meta.kp_contributed_by", "select": "name email"}]. Use after a search
-    returns ids when you need full document bodies for synthesis.
+    [{"path": "meta.kp_contributed_by", "select": "name email"}]. include_attachments
+    adds an `attachments` list per doc. Use after a search returns ids when you need
+    full document bodies for synthesis. Each document carries a `source_url` to cite.
     Returns {"documents": [...], "found": int, "missing": [...ids]}.
     """
     try:
@@ -401,6 +456,8 @@ async def get_documents(
     except KmsError as exc:
         _raise_readable(exc)
     docs = result.get("data") or []
+    for doc in docs:
+        _annotate(doc, content_type, include_attachments)
     returned = {d.get("_id") for d in docs}
     missing = [i for i in document_ids if i not in returned]
     return {"documents": docs, "found": len(docs), "missing": missing}
@@ -417,6 +474,7 @@ async def collect(
     projection: dict[str, Any] | None = None,
     max_results: int = 50,
     page_size: int = 25,
+    include_attachments: bool = False,
     filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Gather up to `max_results` matching documents in ONE call — the server
@@ -425,7 +483,8 @@ async def collect(
     Use for "a bunch of…" or "a representative sample" requests. Capped at 200 to
     protect context size (the response notes if it truncated). Provide exactly one of
     content_types / profile_types. Filter by tag with `tags`, e.g.
-    tags={"states": ["East Java"]} (see search_knowledge). Returns
+    tags={"states": ["East Java"]} (see search_knowledge). include_attachments adds an
+    `attachments` list per doc; every doc carries a `source_url` to cite. Returns
     {"data": [...], "count": <total>, "pages_fetched": int, "truncated": bool}.
     """
     try:
@@ -434,9 +493,47 @@ async def collect(
             search_term=search_term, filters=filters, find_query=find_query,
             tags=tags, sort=sort, projection=projection,
             max_results=max_results, page_size=page_size,
+            include_attachments=include_attachments,
         )
     except KmsError as exc:
         _raise_readable(exc)
+
+
+@mcp.tool()
+async def document_attachments(
+    document_id: str,
+    content_type: str | None = None,
+    profile_type: str | None = None,
+    kinds: list[str] | None = None,
+) -> dict[str, Any]:
+    """Get the attachments (PDFs, images, videos, external links) of one document.
+
+    Pulls the file/link references out of the document — each as
+    {kind: "pdf"|"image"|"video"|"file"|"link", filename, url, content_type, size}.
+    PDFs come first. `kinds` filters (e.g. ["pdf"] for just PDFs). The urls are direct
+    and openable; surface them to the user as clickable links. Provide the type the
+    document belongs to (one of content_type / profile_type).
+    Returns {"document_id", "found", "source_url", "attachments": [...], "count": int}.
+    """
+    try:
+        result = await _client.get_data(
+            build_configs(
+                content_types=[content_type] if content_type else None,
+                profile_types=[profile_type] if profile_type else None,
+                find_query={"_id": document_id}, limit=1, count=False,
+            )
+        )
+    except KmsError as exc:
+        _raise_readable(exc)
+    doc = (result.get("data") or [None])[0]
+    if not doc:
+        return {"document_id": document_id, "found": False, "attachments": [], "count": 0}
+    attachments = extract_doc_attachments(doc, kinds=kinds)
+    return {
+        "document_id": document_id, "found": True,
+        "source_url": document_citation(doc, content_type, _settings.web_url),
+        "attachments": attachments, "count": len(attachments),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -486,8 +583,8 @@ async def related_documents(
     Reads the source document's tags, then searches the same content_type for other
     documents sharing those tag ids via findQuery (excluding the source). `by_tag_type`
     limits which tag collection defines "related" (default: every collection on the
-    document — a match must share a tag in EACH).
-    Returns {"document_id", "found", "filtered_on": {tagType: [ids]}, "related": [...]}.
+    document — a match must share a tag in EACH). Each related doc carries a `source_url`
+    to cite. Returns {"document_id", "found", "filtered_on": {tagType: [ids]}, "related": [...]}.
     """
     try:
         src_res = await _client.get_data(
@@ -519,9 +616,12 @@ async def related_documents(
         )
     except KmsError as exc:
         _raise_readable(exc)
+    related = rel_res.get("data") or []
+    for doc in related:
+        _annotate(doc, content_type)
     return {
         "document_id": document_id, "found": True,
-        "filtered_on": tag_ids, "related": rel_res.get("data") or [],
+        "filtered_on": tag_ids, "related": related,
     }
 
 
@@ -613,8 +713,9 @@ def kms_compare(region_a: str, region_b: str, period: str = "") -> str:
         "to pull a symmetric sample for each region. (Or manually: collect(content_types=..., "
         "tags={\"states\": [region]}) for each.)\n"
         "2. Read both sets; identify common themes AND notable differences.\n"
-        "3. Write a cross-synthesis. Cite specific documents by _id and title, and "
-        "ONLY cite ids that appear in the tool results — never invent a citation.\n"
+        "3. Write a cross-synthesis. Cite every document you reference as a clickable "
+        "link using its `source_url` (e.g. [title](source_url)); ONLY cite source_urls "
+        "that appear in the tool results — never invent one.\n"
         "4. If either region returned few results, say so explicitly."
     )
 
@@ -629,8 +730,9 @@ def kms_research(topic: str, content_types: str = "reports") -> str:
         f'1. Run search_knowledge with search_term="{topic}".\n'
         "2. Broaden recall: run 2-3 more searches with synonyms / related terms.\n"
         "3. Use collect (or paginate) to gather a representative sample, not just page one.\n"
-        "4. Synthesize a concise brief grouped by sub-theme. Cite each claim with the "
-        "source _id + title; only cite ids present in tool results.\n"
+        "4. Synthesize a concise brief grouped by sub-theme. Cite each claim with a "
+        "clickable link to the document's `source_url` (e.g. [title](source_url)); only "
+        "cite source_urls present in tool results.\n"
         "5. Note any gaps or thin areas you found."
     )
 
@@ -644,9 +746,9 @@ def kms_brief(content_type: str) -> str:
         f"1. Use count_only to get the total number of {content_type}.\n"
         '2. Use facet_counts (e.g. facets=[{"field": "conditionAreas", "tagType": "conditionAreas"}]) '
         "for a breakdown.\n"
-        '3. Use collect with sort={"createdAt": -1} to gather the most recent items.\n'
+        '3. Use collect with sort={"kp_date_created": -1} to gather the most recent items.\n'
         "4. Summarize: total volume, distribution across categories, and 3-5 recent "
-        "highlights (cite each by _id + title)."
+        "highlights — cite each as a clickable link to its `source_url`."
     )
 
 

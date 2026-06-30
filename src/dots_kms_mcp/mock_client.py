@@ -200,12 +200,31 @@ class MockKmsClient:
         cond = _CONDITIONS[index % len(_CONDITIONS)]
         return {
             "_id": _object_id(f"{type_id}:{index}"),
+            "metadata": {"contentType": type_id},
             "meta": {
                 "title": title,
                 "description": (
                     f"[MOCK DATA] A sample {type_id} document about {topic}. "
                     "Replace with live results by setting KMS_AUTH_TOKEN/KMS_TENANT."
                 ),
+            },
+            # Synthetic attachments (GCS-object shape + a bare doc link) so the
+            # attachment extractor / include_attachments / document_attachments work.
+            "main": {
+                "uploadDocumentInPDFFormat": [{
+                    "kind": "storage#object", "contentType": "application/pdf",
+                    "originalFilename": f"{type_id}_{index}.pdf",
+                    "publicUrl": f"https://storage.googleapis.com/mock-bucket/{type_id}_{index}.pdf",
+                    "mediaLink": f"https://storage.googleapis.com/download/{type_id}_{index}.pdf",
+                    "size": 1000 + index,
+                }],
+                "uploadImages": [{
+                    "kind": "storage#object", "contentType": "image/jpeg",
+                    "originalFilename": f"{type_id}_{index}.jpeg",
+                    "publicUrl": f"https://storage.googleapis.com/mock-bucket/{type_id}_{index}.jpeg",
+                    "size": 500 + index,
+                }],
+                "attachALinkToTheDocument": f"https://docs.google.com/document/d/mock{index}",
             },
             # Deterministic tag groups (display + tagId + _id) so findQuery tag filters,
             # related_documents, and population demos work in mock mode.

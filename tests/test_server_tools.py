@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "facet_counts",
     "get_documents",
     "collect",
+    "document_attachments",
     # group B — friction-reducers & composite
     "search_by_tag_name",
     "related_documents",
@@ -61,3 +62,32 @@ async def test_get_document_found_and_not_found():
     # query_getdata raising a config error surfaces as ValueError to the model.
     with pytest.raises(ValueError):
         await server.query_getdata({})  # neither content nor profile types
+
+
+async def test_every_returned_doc_has_a_source_url():
+    result = await server.search_knowledge(content_types=["articles"], limit=3)
+    assert result["data"]
+    for doc in result["data"]:
+        assert doc["source_url"].startswith("http")
+        assert "/published-page/articles?id=" in doc["source_url"]
+        assert doc["source_url"].endswith(doc["_id"])
+        # attachments are opt-in, so not present by default
+        assert "attachments" not in doc
+
+
+async def test_include_attachments_adds_pdf_first():
+    doc = (await server.get_document(
+        "anything", content_type="articles", include_attachments=True
+    ))["document"]
+    assert doc["attachments"][0]["kind"] == "pdf"
+    assert doc["attachments"][0]["url"].endswith(".pdf")
+    assert {a["kind"] for a in doc["attachments"]} == {"pdf", "image", "link"}
+
+
+async def test_document_attachments_tool_pdf_only_filter():
+    res = await server.document_attachments(
+        "anything", content_type="articles", kinds=["pdf"]
+    )
+    assert res["found"] is True
+    assert res["count"] == 1 and res["attachments"][0]["kind"] == "pdf"
+    assert "/published-page/articles?id=" in res["source_url"]

@@ -125,3 +125,121 @@ def resolve_tag_from_cache(
         return values[name]
     lowered = {k.lower(): v for k, v in values.items()}
     return lowered.get(name.lower())
+
+
+# --------------------------------------------------------------------------- #
+# Attachments + citations (best-effort document post-processing)
+# --------------------------------------------------------------------------- #
+DEFAULT_WEB_URL = "https://knowledge.noorahealth.org"
+
+# Order attachments are surfaced in (PDFs first).
+_KIND_ORDER = {"pdf": 0, "image": 1, "video": 2, "file": 3, "link": 4}
+# Bare URL strings are only treated as attachments under these key-name hints,
+# so we don't scoop up every URL embedded in rich-text bodies.
+_LINK_KEY_HINTS = ("link", "attach", "document", "drive", "file", "pdf")
+
+
+def _is_http(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def _classify(content_type: str | None, url: str) -> str:
+    if content_type:
+        if content_type == "application/pdf":
+            return "pdf"
+        if content_type.startswith("image/"):
+            return "image"
+        if content_type.startswith("video/"):
+            return "video"
+        return "file"
+    if url.split("?", 1)[0].lower().endswith(".pdf"):
+        return "pdf"
+    return "link"
+
+
+def extract_doc_attachments(
+    doc: dict[str, Any], kinds: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Best-effort: pull attachment links out of a document, anywhere in its tree.
+
+    Handles the two shapes the getData API uses: Google Cloud Storage upload objects
+    (``kind == "storage#object"`` with ``publicUrl`` + ``contentType``) and external
+    link objects/strings (``{"url": ...}`` or a bare URL). Field names vary by content
+    type, so this is structural rather than name-based. Returns a list, PDFs first,
+    deduped by url::
+
+        {"kind": "pdf"|"image"|"video"|"file"|"link", "filename", "url",
+         "content_type", "size", "field"}
+
+    ``kinds`` optionally restricts the result (e.g. ``["pdf"]``).
+    """
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(url: str | None, filename: Any, content_type: Any, size: Any, field: str) -> None:
+        if not isinstance(url, str) or url in seen:
+            return
+        seen.add(url)
+        found.append({
+            "kind": _classify(content_type if isinstance(content_type, str) else None, url),
+            "filename": filename if isinstance(filename, str) else None,
+            "url": url,
+            "content_type": content_type if isinstance(content_type, str) else None,
+            "size": size if isinstance(size, int) else None,
+            "field": field,
+        })
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            is_storage = node.get("kind") == "storage#object" or (
+                "publicUrl" in node and "contentType" in node
+            )
+            if is_storage:
+                add(node.get("publicUrl") or node.get("mediaLink"),
+                    node.get("originalFilename") or node.get("name"),
+                    node.get("contentType"), node.get("size"), path)
+                return  # don't descend (avoids re-emitting mediaLink/selfLink)
+            if _is_http(node.get("url")):
+                meta = node.get("metadata")
+                title = meta.get("title") if isinstance(meta, dict) else None
+                add(node["url"], title, None, None, path)
+                return  # don't descend (avoids preview-thumbnail urls)
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else key)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, path)
+        elif _is_http(node):
+            key = path.rsplit(".", 1)[-1].lower()
+            if any(hint in key for hint in _LINK_KEY_HINTS):
+                add(node, None, None, None, path)
+
+    walk(doc, "")
+    found.sort(key=lambda a: _KIND_ORDER.get(a["kind"], 9))
+    if kinds:
+        allowed = set(kinds)
+        found = [a for a in found if a["kind"] in allowed]
+    return found
+
+
+def document_citation(
+    doc: dict[str, Any],
+    content_type: str | None = None,
+    web_base: str = DEFAULT_WEB_URL,
+) -> str | None:
+    """Build a clickable KMS web-app deep link for a document, or None.
+
+    Pattern: ``{web_base}/published-page/{content_type}?id={_id}``. The content type
+    is taken from the ``content_type`` hint, else ``doc.metadata.contentType``, else
+    ``doc.meta.kp_content_type``. Returns None if the id or content type is unknown
+    (e.g. a projection stripped ``_id``).
+    """
+    doc_id = doc.get("_id") or doc.get("id")
+    ct = (
+        content_type
+        or (doc.get("metadata") or {}).get("contentType")
+        or (doc.get("meta") or {}).get("kp_content_type")
+    )
+    if not doc_id or not ct:
+        return None
+    return f"{web_base.rstrip('/')}/published-page/{ct}?id={doc_id}"
