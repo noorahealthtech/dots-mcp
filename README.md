@@ -66,33 +66,57 @@ that it's in mock mode and serves sample data. Set both vars (and optionally
 
 ## The discovery schema (`kms_schema.json`)
 
-The `getData` API has **no endpoint to list content/profile/tag types** or to
-resolve a tag name (e.g. "Karnataka") to its MongoDB ObjectId. So those live in a
-local, developer-maintained file. Copy the template and edit it:
+The `getData` API has **no endpoint to list content/profile/tag types**, so those
+live in a local file. Generate it from your live tenant (recommended) — the script
+confirms each content type is readable, fetches counts, and harvests the tag
+vocabularies from real documents:
 
 ```bash
-cp kms_schema.example.json kms_schema.json
+uv run python scripts/build_schema.py            # writes ./kms_schema.json
+uv run python scripts/build_schema.py someNewType # also confirm/add UI-found types
 ```
+
+> ⚠️ Content-type ids are exactly as the API spells them, which is **not always
+> the web-UI URL**. e.g. the API type is `organisationalReports` (British "s"),
+> while the UI URL shows `organizationalReports` (which 401s). The script warns on
+> any id it can't read.
 
 Shape:
 
 ```jsonc
 {
-  "content_types": [{ "id": "articles", "name": "Articles", "description": "..." }],
-  "profile_types": [{ "id": "volunteers", "name": "Volunteers" }],
+  "content_types": [{ "id": "reports", "name": "Reports", "description": "...", "count": 300 }],
+  "profile_types": [],   // none are accessible in this tenant
   "tag_types": [
-    { "id": "states", "name": "States", "name_path": "meta.title",
-      "values": { "Karnataka": "673d8531d6ef55f9b7958e6d" } }   // cached name -> ObjectId
+    { "id": "country", "name": "Country", "name_path": "tags.country.data.display",
+      "filter_field": "tagId",                       // "tagId" slug, or "_id" for slug-less collections
+      "values": { "Indonesia": "indonesia" },        // display -> filter id
+      "content_types": ["reports", "routineVisits"] } // which types carry this collection
   ]
 }
 ```
 
 - `list_content_types` / `list_profile_types` / `list_tag_types` read from this file.
-- `resolve_tag` checks the `values` cache first; add confirmed mappings here so the
-  model never has to guess tag IDs.
+- **Tag filtering uses Mongo `findQuery` on `tags.<collection>.data.<filter_field>`**
+  (the documented `activeFilters`/`tagType` shape is rejected by the API). The tools
+  build this for you — just pass display names via the `tags` param (below).
 
 If `KMS_SCHEMA_PATH` is unset, the server uses `./kms_schema.json` when present,
 otherwise the packaged default.
+
+### Filtering by tags
+
+Every query tool (`search_knowledge`, `collect`, `count_only`, `facet_counts`) takes
+a `tags` map of collection → values (display names or slugs):
+
+```jsonc
+search_knowledge(content_types=["reports"],
+                 tags={"country": ["Indonesia"], "conditionAreas": ["Antenatal Care (ANC)"]})
+```
+
+Values within a list are OR'd; collections are AND'd. `list_tag_types` shows valid
+values per collection (and which content types carry each — vocabularies differ by
+type). `search_by_tag_name` and `compare_regions` are one-step convenience wrappers.
 
 ## Run & inspect
 

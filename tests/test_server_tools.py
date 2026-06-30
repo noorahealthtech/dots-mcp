@@ -50,7 +50,8 @@ async def test_search_knowledge_runs_in_mock_mode():
 
 async def test_resolve_tag_hits_cache():
     result = await server.resolve_tag("states", "Karnataka")
-    assert result["id"] == "673d8531d6ef55f9b7958e6d"
+    assert result["value"] == "karnataka"
+    assert result["filter_field"] == "tagId"
     assert result["source"] == "cache"
 
 

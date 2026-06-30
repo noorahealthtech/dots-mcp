@@ -14,10 +14,9 @@ from typing import Any, NoReturn
 
 from mcp.server.fastmcp import FastMCP
 
-from .configs import build_configs, date_range_filter, tag_filter
+from .configs import build_configs, date_query, merge_find_query, tag_query
 from .errors import KmsError
 from .getdata_client import build_client
-from .mock_client import mock_resolve_tag_candidates
 from .schema import (
     _cached_schema,
     extract_doc_tag_ids,
@@ -25,7 +24,6 @@ from .schema import (
     get_content_types,
     get_profile_types,
     get_tag_types,
-    resolve_tag_from_cache,
 )
 from .settings import Settings
 
@@ -50,40 +48,32 @@ def _raise_readable(exc: KmsError) -> NoReturn:
     raise ValueError(detail) from exc
 
 
-async def _resolve_tag(
-    tag_type: str, name: str, name_path: str | None = None
-) -> dict[str, Any]:
-    """Resolve a tag name -> ObjectId. Shared by resolve_tag, search_by_tag_name,
-    compare_regions. Cache first, then mock/live fallback. May raise KmsError.
+def _resolve_tag(tag_type: str, name: str) -> dict[str, Any]:
+    """Resolve a tag NAME to the identifier used for filtering, from the schema cache.
+
+    Tags filter via findQuery on ``tags.<collection>.data.<filter_field>`` (see
+    ``tag_query``), where ``filter_field`` is ``tagId`` for slugged collections or
+    ``_id`` for slug-less ones (e.g. nooraUsers). This returns what ``name`` maps to,
+    so callers can report it. Match is case-insensitive on the display name.
+
+    Returns {"tag_type", "name", "display"?, "value"?, "filter_field"?,
+    "source": "cache"|"not_found", "candidates"?: [near-matches]}.
     """
-    schema = _schema()
-    cached = resolve_tag_from_cache(schema, tag_type, name)
-    if cached:
-        return {"tag_type": tag_type, "name": name, "id": cached, "source": "cache"}
+    entry = find_tag_type(_schema(), tag_type) or {}
+    field = entry.get("filter_field", "tagId")
+    values: dict[str, str] = entry.get("values", {}) or {}
+    by_display = {disp.lower(): (disp, val) for disp, val in values.items()}
 
-    entry = find_tag_type(schema, tag_type)
-    path = name_path or (entry or {}).get("name_path") or "meta.title"
-
-    if _settings.mock:
-        candidates = mock_resolve_tag_candidates(name, None)
+    hit = by_display.get(name.lower())
+    if hit:
+        disp, val = hit
         return {
-            "tag_type": tag_type, "name": name, "id": candidates[0]["_id"],
-            "source": "mock", "candidates": candidates,
+            "tag_type": tag_type, "name": name, "display": disp,
+            "value": val, "filter_field": field, "source": "cache",
         }
-
-    # Best-effort live fallback (speculative — the API has no dedicated tags endpoint).
-    configs = build_configs(
-        content_types=[tag_type], find_query={path: name},
-        projection={path: 1}, limit=10, count=False,
-    )
-    result = await _client.get_data(configs)
-    candidates = result.get("data") or []
-    if not candidates:
-        return {"tag_type": tag_type, "name": name, "source": "not_found", "candidates": []}
-    return {
-        "tag_type": tag_type, "name": name, "id": candidates[0].get("_id"),
-        "source": "query", "candidates": candidates,
-    }
+    # Not cached: tag_query will still match it on `display`. Offer near-matches.
+    candidates = [disp for disp in values if name.lower() in disp.lower()][:8]
+    return {"tag_type": tag_type, "name": name, "source": "not_found", "candidates": candidates}
 
 
 async def _collect(
@@ -93,6 +83,7 @@ async def _collect(
     search_term: str | None = None,
     filters: list[dict[str, Any]] | None = None,
     find_query: dict[str, Any] | None = None,
+    tags: dict[str, Any] | None = None,
     sort: dict[str, Any] | None = None,
     projection: dict[str, Any] | None = None,
     max_results: int = 50,
@@ -101,6 +92,8 @@ async def _collect(
     """Auto-paginate getData up to ``max_results``. Shared by the collect tool and
     compare_regions. Honors the returned ``skip``; stops at the cap or last page.
     """
+    if tags:
+        find_query = merge_find_query(find_query, tag_query(tags, _schema()))
     cap = min(int(max_results), MAX_COLLECT)
     size = min(int(page_size) or 1, cap)
     collected: list[dict[str, Any]] = []
@@ -146,62 +139,56 @@ async def search_knowledge(
     content_types: list[str] | None = None,
     profile_types: list[str] | None = None,
     search_term: str | None = None,
-    filters: list[dict[str, Any]] | None = None,
+    tags: dict[str, list[str]] | None = None,
     find_query: dict[str, Any] | None = None,
     sort: dict[str, Any] | None = None,
     projection: dict[str, Any] | None = None,
     limit: int | None = 10,
     skip: int = 0,
     count: bool = True,
+    filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Search and filter the knowledge base. This is the primary query tool.
 
     Query EITHER content OR profiles — never both in one call:
-      - content_types: e.g. ["articles"], ["stories"]. Use list_content_types to discover.
+      - content_types: e.g. ["reports"], ["routineVisits"]. Use list_content_types to discover.
       - profile_types: e.g. ["volunteers"]. Use list_profile_types to discover.
     Exactly one of content_types / profile_types must be provided.
 
     search_term: full-text query (e.g. "breastfeeding"); results come back in
       relevance order. Omit to browse/filter without text search.
 
+    tags: THE way to filter by tag — a map of tag collection -> list of values
+      (human display names or slugs), e.g.
+      {"country": ["Indonesia"], "conditionAreas": ["Antenatal Care (ANC)"]}.
+      Multiple values in a list are OR'd; multiple collections are AND'd. Discover
+      collections and their valid values with list_tag_types (values differ by
+      content type — see each tag type's "content_types"). No ObjectIds needed.
+
     Pagination: pass limit (default 10) and skip (default 0). The response may
     include a "skip" value — pass that exact value back as `skip` to get the next
     page. When the response has no "skip", you've reached the last page. The
     response "count" is the total number of matching documents.
 
-    sort: {"<field>": 1 | -1}, e.g. {"createdAt": -1} for newest first.
+    sort: {"<field>": 1 | -1}, e.g. {"kp_date_created": -1} for newest first.
     projection: MongoDB projection to limit returned fields,
-      e.g. {"meta.title": 1, "meta.description": 1, "createdAt": 1}.
-    find_query: raw MongoDB conditions merged into the query,
-      e.g. {"status": "published"}.
+      e.g. {"meta.title": 1, "main.giveASummary": 1, "kp_date_created": 1}.
+    find_query: raw MongoDB conditions merged into the query (AND'd with `tags`),
+      e.g. {"kp_published_status": "published"} or a date range
+      {"kp_date_created": {"$gte": "2024-01-01", "$lte": "2025-01-01"}}. Tag
+      filtering also goes through findQuery under the hood
+      ({"tags.<collection>.data.tagId": {"$in": [...]}}); prefer the `tags` param.
 
-    filters: structured filters as a list of {"target": {...}, "values": [...]}.
-    IMPORTANT: tag-based filters need MongoDB ObjectId tag IDs, NOT human names —
-    use resolve_tag to turn a name like "Karnataka" into its id first. Filter types:
-      - tagType: {"target": {"filterType": "tagType", "tagType": "countries"},
-                  "values": ["<tagId>", ...]}
-      - valuePathType: match a field value at a path,
-          {"target": {"filterType": "valuePathType", "valuePath": "meta.status"},
-           "values": ["published"]}
-      - dateRangeType: {"target": {"filterType": "dateRangeType", "path": "createdAt"},
-          "values": [{"start": "2024-01-01T00:00:00.000Z", "end": "2024-12-31T23:59:59.999Z"}]}
-      - numberRangeType: {"target": {"filterType": "numberRangeType", "path": "meta.rating"},
-          "values": [{"min": 3, "max": 5}]}  (or [{"exact": 4}])
-      - rollupRelationshipType: filter content by a tag on a related user profile,
-          {"target": {"filterType": "rollupRelationshipType", "tagType": "states",
-           "relationshipValuePath": "meta.kp_contributed_by"}, "values": ["<stateTagId>"]}
-      - nestedRollupTagType: traverse a tag hierarchy bottom->top,
-          {"target": {"filterType": "nestedRollupTagType", "rollupPath": ["cities", "states"]},
-           "values": ["<stateTagId>"]}
-      - rollupValuePathType: filter by a field in a referenced collection,
-          {"target": {"filterType": "rollupValuePathType", "collectionToRollup": "users",
-           "valuePathToRollup": "meta.kp_contributed_by", "valuePathInRolledUpCollection": "role"},
-           "values": ["superAdmin"]}
+    filters: ADVANCED/raw activeFilters passthrough. NOTE: the tagType/activeFilters
+      mechanism is NOT supported by this tenant's API (returns HTTP 500) — use `tags`
+      and `find_query` instead. Left here only for raw experimentation.
 
     Returns {"data": [...documents], "count"?: int, "skip"?: int}.
     For advanced options (population/joins, facet, aggregation), use query_getdata.
     """
     try:
+        if tags:
+            find_query = merge_find_query(find_query, tag_query(tags, _schema()))
         configs = build_configs(
             content_types=content_types,
             profile_types=profile_types,
@@ -229,7 +216,7 @@ async def get_document(
     """Fetch a single document by its _id.
 
     Provide the type the document belongs to: exactly one of content_type (e.g.
-    "articles") or profile_type (e.g. "volunteers"). projection optionally limits
+    "reports") or profile_type (e.g. "volunteers"). projection optionally limits
     returned fields.
 
     Returns {"document": {...}} when found, or {"document": None, "found": false}
@@ -259,34 +246,38 @@ async def get_document(
 # --------------------------------------------------------------------------- #
 @mcp.tool()
 async def list_content_types() -> list[dict[str, Any]]:
-    """List the content types you can query (e.g. articles, stories, reports).
+    """List the content types you can query (e.g. reports, routineVisits, successStory).
 
     Sourced from a local, developer-maintained schema (kms_schema.json), not a
     live endpoint. Call this before building a content query if you are unsure
-    which content_types exist. Each entry: {id, name, description}.
+    which content_types exist (each entry includes a doc count). Each entry:
+    {id, name, description, count?}.
     """
     return get_content_types(_schema())
 
 
 @mcp.tool()
 async def list_profile_types() -> list[dict[str, Any]]:
-    """List the profile types you can query (e.g. volunteers, coreTeam, researchers).
+    """List the profile types you can query (people/entities, as opposed to content).
 
-    Sourced from the local kms_schema.json. Profiles are people/entities; content
-    is articles/stories/etc. A query targets one or the other, never both.
-    Each entry: {id, name, description}.
+    Sourced from the local kms_schema.json. A query targets content OR profiles,
+    never both. NOTE: this tenant exposes no readable profile types (the list may be
+    empty) — most queries use content_types. Each entry: {id, name, description}.
     """
     return get_profile_types(_schema())
 
 
 @mcp.tool()
 async def list_tag_types() -> list[dict[str, Any]]:
-    """List tag types available for filtering (e.g. countries, states, cities, category).
+    """List tag collections available for filtering (e.g. country, states, districts,
+    conditionAreas, subject, stakeholder, teams, nooraUsers, type, lens).
 
-    Sourced from the local kms_schema.json. Each entry includes any pre-cached
-    name->ObjectId mappings under "values"; tag filters in search_knowledge need
-    those ObjectIds (use resolve_tag for names that aren't cached).
-    Each entry: {id, name, description, name_path, values: {name: objectId}}.
+    Sourced from the local kms_schema.json (harvested from live data). Pass a tag
+    type's id and one of its display values to the `tags` param of search_knowledge /
+    collect / count_only / facet_counts, e.g. tags={"country": ["Indonesia"]}.
+    Each entry: {id, name, description, name_path, filter_field, values: {display: id},
+    content_types: [...]}. "content_types" lists which content types actually carry
+    that collection — tag vocabularies differ by content type.
     """
     return get_tag_types(_schema())
 
@@ -295,29 +286,18 @@ async def list_tag_types() -> list[dict[str, Any]]:
 async def resolve_tag(
     tag_type: str,
     name: str,
-    name_path: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a human tag name (e.g. "Karnataka") to its MongoDB ObjectId for use
-    in search_knowledge filters.
+    """Look up what a tag NAME maps to in a collection (mostly a sanity check).
 
-    Resolution order:
-      1. The local schema cache (authoritative, developer-curated).
-      2. If not cached AND running against a live KMS, a best-effort query that
-         treats the tag type as a queryable collection and matches `name` at
-         `name_path` (default from the schema, else "meta.title").
+    You usually DON'T need this — just pass display names straight to the `tags`
+    param of search_knowledge (e.g. tags={"states": ["East Java"]}); it resolves
+    names for you. Use this only to confirm a name exists or to see near-matches.
 
-    NOTE: the live fallback is SPECULATIVE — the documented API exposes only
-    getData with no dedicated tags endpoint, so candidates returned by the
-    fallback should be confirmed before relying on them. Prefer adding confirmed
-    mappings to kms_schema.json so future lookups hit the cache.
-
-    Returns {"tag_type", "name", "id"?, "source": "cache"|"query"|"mock"|"not_found",
-    "candidates"?: [...]}.
+    Resolves from the local schema cache (case-insensitive on the display name).
+    Returns {"tag_type", "name", "display"?, "value"?, "filter_field"?,
+    "source": "cache"|"not_found", "candidates"?: [near-matches]}.
     """
-    try:
-        return await _resolve_tag(tag_type, name, name_path)
-    except KmsError as exc:
-        _raise_readable(exc)
+    return _resolve_tag(tag_type, name)
 
 
 # --------------------------------------------------------------------------- #
@@ -328,17 +308,21 @@ async def count_only(
     content_types: list[str] | None = None,
     profile_types: list[str] | None = None,
     search_term: str | None = None,
-    filters: list[dict[str, Any]] | None = None,
+    tags: dict[str, list[str]] | None = None,
     find_query: dict[str, Any] | None = None,
+    filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return ONLY the total number of matching documents — no documents fetched.
 
     Uses the API's optimized count mode (useCountDAL), so it's cheap. Call this when
     the user asks "how many…", or before a large pull to decide how many pages to
-    fetch. Provide exactly one of content_types / profile_types (filters/search
-    optional). Returns {"count": int}.
+    fetch. Provide exactly one of content_types / profile_types. Filter by tag with
+    `tags`, e.g. tags={"country": ["Indonesia"]} (see search_knowledge). Returns
+    {"count": int}.
     """
     try:
+        if tags:
+            find_query = merge_find_query(find_query, tag_query(tags, _schema()))
         configs = build_configs(
             content_types=content_types, profile_types=profile_types,
             search_term=search_term, filters=filters, find_query=find_query,
@@ -347,7 +331,14 @@ async def count_only(
         result = await _client.get_data(configs)
     except KmsError as exc:
         _raise_readable(exc)
-    return {"count": result.get("count")}
+    # useCountDAL returns the count nested per type ({"data": [{"count": N, ...}]});
+    # the mock returns a top-level "count". Read top-level first, else sum the rows.
+    count = result.get("count")
+    if count is None:
+        rows = result.get("data") or []
+        per_type = [r["count"] for r in rows if isinstance(r, dict) and isinstance(r.get("count"), int)]
+        count = sum(per_type) if per_type else None
+    return {"count": count}
 
 
 @mcp.tool()
@@ -355,20 +346,25 @@ async def facet_counts(
     facets: list[dict[str, Any]],
     content_types: list[str] | None = None,
     profile_types: list[str] | None = None,
-    filters: list[dict[str, Any]] | None = None,
+    tags: dict[str, list[str]] | None = None,
+    find_query: dict[str, Any] | None = None,
     search_term: str | None = None,
+    filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Get counts grouped by a field/tag, WITHOUT fetching documents.
 
     `facets` is a list like [{"field": "category", "tagType": "category"}]; each entry
     groups results and returns a count per bucket. Great for overviews and comparisons
-    ("how many articles per category", distributions per region). Provide exactly one
-    of content_types / profile_types. Returns the API's faceted counts.
+    ("how many reports per conditionArea", distributions per region). Provide exactly
+    one of content_types / profile_types. Narrow the population first with `tags`
+    (e.g. tags={"country": ["India"]}) or `find_query`. Returns the API's faceted counts.
     """
     try:
+        if tags:
+            find_query = merge_find_query(find_query, tag_query(tags, _schema()))
         configs = build_configs(
             content_types=content_types, profile_types=profile_types,
-            search_term=search_term, filters=filters, count=True,
+            search_term=search_term, filters=filters, find_query=find_query, count=True,
             extra={"facet": facets, "useCountDAL": True},
         )
         return await _client.get_data(configs)
@@ -415,25 +411,29 @@ async def collect(
     content_types: list[str] | None = None,
     profile_types: list[str] | None = None,
     search_term: str | None = None,
-    filters: list[dict[str, Any]] | None = None,
+    tags: dict[str, list[str]] | None = None,
+    find_query: dict[str, Any] | None = None,
     sort: dict[str, Any] | None = None,
     projection: dict[str, Any] | None = None,
     max_results: int = 50,
     page_size: int = 25,
+    filters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Gather up to `max_results` matching documents in ONE call — the server
     paginates for you, so you don't manage `skip`.
 
     Use for "a bunch of…" or "a representative sample" requests. Capped at 200 to
     protect context size (the response notes if it truncated). Provide exactly one of
-    content_types / profile_types. Returns
+    content_types / profile_types. Filter by tag with `tags`, e.g.
+    tags={"states": ["East Java"]} (see search_knowledge). Returns
     {"data": [...], "count": <total>, "pages_fetched": int, "truncated": bool}.
     """
     try:
         return await _collect(
             content_types=content_types, profile_types=profile_types,
-            search_term=search_term, filters=filters, sort=sort,
-            projection=projection, max_results=max_results, page_size=page_size,
+            search_term=search_term, filters=filters, find_query=find_query,
+            tags=tags, sort=sort, projection=projection,
+            max_results=max_results, page_size=page_size,
         )
     except KmsError as exc:
         _raise_readable(exc)
@@ -452,21 +452,18 @@ async def search_by_tag_name(
     limit: int = 10,
     skip: int = 0,
 ) -> dict[str, Any]:
-    """Search content filtered by a tag NAME in one step.
+    """Search content filtered by a single tag NAME in one step.
 
-    e.g. tag_type="states", tag_name="Karnataka". Resolves the name to its ObjectId
-    for you, then filters — saving the separate resolve_tag + search_knowledge dance.
-    Returns the search result plus "resolved_tag": {name, id, source}.
+    e.g. tag_type="conditionAreas", tag_name="Antenatal Care (ANC)". Builds the tag
+    findQuery for you — equivalent to search_knowledge with tags={tag_type:[tag_name]}.
+    For multiple tags/collections at once, use search_knowledge's `tags` param directly.
+    Returns the search result plus "resolved_tag": {tag_type, name, value?, source}.
     """
+    tag = _resolve_tag(tag_type, tag_name)
     try:
-        tag = await _resolve_tag(tag_type, tag_name)
-        if not tag.get("id"):
-            raise ValueError(
-                f"Could not resolve tag '{tag_name}' in tag type '{tag_type}'."
-            )
         configs = build_configs(
             content_types=content_types, search_term=search_term,
-            filters=[tag_filter(tag_type, [tag["id"]])],
+            find_query=tag_query({tag_type: [tag_name]}, _schema()),
             sort=sort, limit=limit, skip=skip,
         )
         result = await _client.get_data(configs)
@@ -487,8 +484,9 @@ async def related_documents(
     """Find documents related to a given one by shared tags.
 
     Reads the source document's tags, then searches the same content_type for other
-    documents sharing those tags (excluding the source). `by_tag_type` limits which
-    tag type defines "related" (default: any tag type on the document).
+    documents sharing those tag ids via findQuery (excluding the source). `by_tag_type`
+    limits which tag collection defines "related" (default: every collection on the
+    document — a match must share a tag in EACH).
     Returns {"document_id", "found", "filtered_on": {tagType: [ids]}, "related": [...]}.
     """
     try:
@@ -503,8 +501,11 @@ async def related_documents(
             return {"document_id": document_id, "found": False, "related": []}
 
         tag_ids = extract_doc_tag_ids(src, by_tag_type)
-        filters = [tag_filter(tt, ids) for tt, ids in tag_ids.items() if ids]
-        if not filters:
+        find_query: dict[str, Any] = {"_id": {"$ne": document_id}}
+        for tt, ids in tag_ids.items():
+            if ids:
+                find_query[f"tags.{tt}.data._id"] = {"$in": ids}
+        if len(find_query) == 1:  # only the _id exclusion -> nothing to match on
             return {
                 "document_id": document_id, "found": True, "filtered_on": {},
                 "related": [], "note": "source document has no extractable tags to match on",
@@ -512,8 +513,8 @@ async def related_documents(
 
         rel_res = await _client.get_data(
             build_configs(
-                content_types=[content_type], filters=filters,
-                find_query={"_id": {"$ne": document_id}}, limit=limit, count=False,
+                content_types=[content_type], find_query=find_query,
+                limit=limit, count=False,
             )
         )
     except KmsError as exc:
@@ -532,30 +533,32 @@ async def compare_regions(
     tag_type: str = "states",
     period: dict[str, Any] | None = None,
     sample_size: int = 20,
+    date_field: str = "kp_date_created",
 ) -> dict[str, Any]:
     """Pull comparable samples of content for two regions so you can cross-synthesize them.
 
-    Resolves each region name to its tag id, applies a `tag_type` filter (plus an
-    optional date window), and collects up to `sample_size` documents per region.
-    `period` is an optional {"start": ISO8601, "end": ISO8601} window on createdAt.
-    The server guarantees symmetric, complete retrieval; YOU do the synthesis — cite
-    _id + title, and only cite ids present in the results. Returns
+    Filters each region by `tag_type` (default "states") via tag findQuery, plus an
+    optional date window, and collects up to `sample_size` documents per region.
+    `period` is an optional {"start": ISO8601, "end": ISO8601} window on `date_field`
+    (default "kp_date_created"; note this data has no "createdAt"). The server
+    guarantees symmetric, complete retrieval; YOU do the synthesis — cite _id + title,
+    and only cite ids present in the results. Returns
     {"region_a": {region, resolved_tag, count, documents}, "region_b": {...},
      "shared_tag_type", "content_types"}.
     """
-    content_types = content_types or ["articles"]
+    content_types = content_types or ["reports"]
     period = period or {}
     try:
         out: dict[str, Any] = {"shared_tag_type": tag_type, "content_types": content_types}
         for key, region in (("region_a", region_a), ("region_b", region_b)):
-            tag = await _resolve_tag(tag_type, region)
-            filters = [tag_filter(tag_type, [tag.get("id")])]
+            tag = _resolve_tag(tag_type, region)
+            find_query = tag_query({tag_type: [region]}, _schema())
             if period.get("start") or period.get("end"):
-                filters.append(
-                    date_range_filter("createdAt", period.get("start"), period.get("end"))
+                find_query = merge_find_query(
+                    find_query, date_query(date_field, period.get("start"), period.get("end"))
                 )
             collected = await _collect(
-                content_types=content_types, filters=filters,
+                content_types=content_types, find_query=find_query,
                 max_results=sample_size, page_size=min(int(sample_size), 25),
             )
             out[key] = {
@@ -576,12 +579,13 @@ async def query_getdata(configs: dict[str, Any]) -> dict[str, Any]:
 
     Use this for capabilities search_knowledge doesn't expose directly, such as:
       - population: [{"path": "meta.kp_contributed_by", "select": "name email"}]  (joins)
-      - facet: [{"field": "category", "tagType": "category"}]  (counts per group)
+      - facet: [{"field": "conditionAreas", "tagType": "conditionAreas"}]  (counts per group)
       - useAggregation: {"groupByWithLookup": true}
       - lookupConfig, taggedResourcesCount, ksConfig, etc.
 
-    `configs` must still contain exactly one of contentTypes / profileTypes.
-    Example: {"contentTypes": ["articles"], "limit": 10,
+    `configs` must still contain exactly one of contentTypes / profileTypes. Tag filters
+    go in findQuery, e.g. {"tags.country.data.tagId": {"$in": ["indonesia"]}}.
+    Example: {"contentTypes": ["reports"], "limit": 10,
               "population": [{"path": "meta.kp_contributed_by", "select": "name"}]}
 
     Returns the raw API response: {"data": [...], "count"?: int, "skip"?: int}.
@@ -606,8 +610,8 @@ def kms_compare(region_a: str, region_b: str, period: str = "") -> str:
         f"Compare the knowledge base content for {region_a} vs {region_b}{window}.\n\n"
         "Steps:\n"
         f"1. Call compare_regions(region_a=\"{region_a}\", region_b=\"{region_b}\"{period_arg}) "
-        "to pull a symmetric sample for each region. (Or manually: resolve_tag each "
-        "region, then collect ~20 docs each with the tag filter.)\n"
+        "to pull a symmetric sample for each region. (Or manually: collect(content_types=..., "
+        "tags={\"states\": [region]}) for each.)\n"
         "2. Read both sets; identify common themes AND notable differences.\n"
         "3. Write a cross-synthesis. Cite specific documents by _id and title, and "
         "ONLY cite ids that appear in the tool results — never invent a citation.\n"
@@ -616,7 +620,7 @@ def kms_compare(region_a: str, region_b: str, period: str = "") -> str:
 
 
 @mcp.prompt()
-def kms_research(topic: str, content_types: str = "articles") -> str:
+def kms_research(topic: str, content_types: str = "reports") -> str:
     """Guided research recipe: a thorough, cited brief on a topic."""
     return (
         f'Research the topic "{topic}" in the knowledge base '
@@ -638,8 +642,8 @@ def kms_brief(content_type: str) -> str:
         f'Produce an overview digest of the "{content_type}" content type.\n\n'
         "Steps:\n"
         f"1. Use count_only to get the total number of {content_type}.\n"
-        '2. Use facet_counts (e.g. facets=[{"field": "category", "tagType": "category"}]) '
-        "for a category breakdown.\n"
+        '2. Use facet_counts (e.g. facets=[{"field": "conditionAreas", "tagType": "conditionAreas"}]) '
+        "for a breakdown.\n"
         '3. Use collect with sort={"createdAt": -1} to gather the most recent items.\n'
         "4. Summarize: total volume, distribution across categories, and 3-5 recent "
         "highlights (cite each by _id + title)."

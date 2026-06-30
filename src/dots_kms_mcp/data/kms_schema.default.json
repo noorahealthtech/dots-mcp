@@ -12,36 +12,31 @@
   ],
   "tag_types": [
     {
-      "id": "countries",
-      "name": "Countries",
-      "name_path": "meta.title",
-      "description": "Country tags. Content can be tagged with countries.",
-      "values": {
-        "India": "607f1f77bcf86cd799439011"
-      }
+      "id": "country",
+      "name": "Country",
+      "name_path": "tags.country.data.display",
+      "filter_field": "tagId",
+      "description": "Country tags. Filter with tags={\"country\": [\"India\"]}.",
+      "values": { "India": "india", "Indonesia": "indonesia", "Bangladesh": "bangladesh" },
+      "content_types": ["articles"]
     },
     {
       "id": "states",
-      "name": "States",
-      "name_path": "meta.title",
-      "description": "State tags (e.g. for rollups: cities -> states -> countries).",
-      "values": {
-        "Karnataka": "673d8531d6ef55f9b7958e6d"
-      }
+      "name": "State",
+      "name_path": "tags.states.data.display",
+      "filter_field": "tagId",
+      "description": "State/region tags. Filter with tags={\"states\": [\"Karnataka\"]}.",
+      "values": { "Karnataka": "karnataka", "Punjab": "punjab", "Maharashtra": "maharashtra" },
+      "content_types": ["articles"]
     },
     {
-      "id": "cities",
-      "name": "Cities",
-      "name_path": "meta.title",
-      "description": "City tags. Content is often tagged at the city level.",
-      "values": {}
-    },
-    {
-      "id": "category",
-      "name": "Category",
-      "name_path": "meta.title",
-      "description": "Content category tags.",
-      "values": {}
+      "id": "conditionAreas",
+      "name": "Condition Area",
+      "name_path": "tags.conditionAreas.data.display",
+      "filter_field": "tagId",
+      "description": "Clinical condition-area tags.",
+      "values": { "Antenatal Care (ANC)": "antenatal_care_anc", "Newborn Care": "newborn_care" },
+      "content_types": ["articles"]
     }
   ]
 }

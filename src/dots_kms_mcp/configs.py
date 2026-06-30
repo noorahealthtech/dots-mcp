@@ -66,8 +66,8 @@ def build_configs(
 
 
 def tag_filter(tag_type: str, tag_ids: list[str]) -> dict[str, Any]:
-    """Build a `tagType` activeFilter entry matching documents tagged with any of
-    ``tag_ids`` under ``tag_type``. Shared by search_by_tag_name and compare_regions.
+    """DEPRECATED: builds a `tagType` activeFilter. The live getData API rejects this
+    shape (HTTP 500) — use ``tag_query`` (findQuery) instead. Kept for back-compat only.
     """
     return {"target": {"filterType": "tagType", "tagType": tag_type}, "values": list(tag_ids)}
 
@@ -75,13 +75,118 @@ def tag_filter(tag_type: str, tag_ids: list[str]) -> dict[str, Any]:
 def date_range_filter(
     path: str, start: str | None = None, end: str | None = None
 ) -> dict[str, Any]:
-    """Build a `dateRangeType` activeFilter on ``path`` (ISO-8601 ``start``/``end``)."""
+    """DEPRECATED: builds a `dateRangeType` activeFilter. The live API rejects this —
+    use ``date_query`` (findQuery range) instead. Kept for back-compat only.
+    """
     bounds: dict[str, Any] = {}
     if start:
         bounds["start"] = start
     if end:
         bounds["end"] = end
     return {"target": {"filterType": "dateRangeType", "path": path}, "values": [bounds]}
+
+
+def _find_tag_type(schema: dict[str, Any] | None, tag_type_id: str) -> dict[str, Any] | None:
+    """Local tag_type lookup (kept here so configs.py stays free of schema.py imports)."""
+    for entry in (schema or {}).get("tag_types", []):
+        if entry.get("id") == tag_type_id:
+            return entry
+    return None
+
+
+def tag_query(
+    tags: dict[str, Any], schema: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build a findQuery fragment filtering by embedded tag collections.
+
+    ``tags`` maps a collection id to value(s) — display names or slugs, e.g.
+    ``{"country": ["Indonesia"], "conditionAreas": ["Antenatal Care (ANC)"]}``.
+    Each value is translated to the collection's filter field (``tagId`` slug, or
+    ``_id`` for slug-less collections like nooraUsers) via the schema's cached
+    ``values`` map; values not found there fall back to matching on ``display``.
+    Multiple collections AND together; a collection that needs both an id match and
+    a display fallback is combined with ``$or``.
+
+    This is how tag filtering actually works on the live getData API — the
+    activeFilters/tagType shape (``tag_filter``) is rejected with HTTP 500.
+    """
+    clauses: list[dict[str, Any]] = []
+    for cid, raw in tags.items():
+        values = [raw] if isinstance(raw, str) else list(raw or [])
+        if not values:
+            continue
+        entry = _find_tag_type(schema, cid) or {}
+        field = entry.get("filter_field", "tagId")
+        cache: dict[str, str] = entry.get("values", {}) or {}
+        by_display = {k.lower(): v for k, v in cache.items()}
+        known_ids = set(cache.values())
+
+        resolved: list[str] = []
+        unresolved: list[str] = []
+        for v in values:
+            if v in known_ids:
+                resolved.append(v)
+            elif v.lower() in by_display:
+                resolved.append(by_display[v.lower()])
+            else:
+                unresolved.append(v)
+
+        field_clause = {f"tags.{cid}.data.{field}": {"$in": resolved}} if resolved else None
+        disp_clause = {f"tags.{cid}.data.display": {"$in": unresolved}} if unresolved else None
+        if field_clause and disp_clause:
+            clauses.append({"$or": [field_clause, disp_clause]})
+        elif field_clause:
+            clauses.append(field_clause)
+        elif disp_clause:
+            clauses.append(disp_clause)
+
+    if not clauses:
+        return {}
+    if len(clauses) == 1:
+        return clauses[0]
+    # Distinct keys per collection AND naturally; if any clause is an $or, AND
+    # everything explicitly to avoid colliding on the "$or" key.
+    if any("$or" in c for c in clauses):
+        return {"$and": clauses}
+    merged: dict[str, Any] = {}
+    for clause in clauses:
+        merged.update(clause)
+    return merged
+
+
+def date_query(
+    field: str, start: str | None = None, end: str | None = None
+) -> dict[str, Any]:
+    """Build a findQuery date-range fragment: ``{field: {"$gte": start, "$lte": end}}``.
+
+    ``start``/``end`` are ISO-8601 strings; omit either bound. Returns ``{}`` if both
+    are absent.
+    """
+    bounds: dict[str, Any] = {}
+    if start:
+        bounds["$gte"] = start
+    if end:
+        bounds["$lte"] = end
+    return {field: bounds} if bounds else {}
+
+
+def merge_find_query(
+    base: dict[str, Any] | None, extra: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Combine two findQuery dicts. Disjoint keys merge (AND); colliding keys are
+    wrapped in ``$and`` so neither is silently dropped.
+    """
+    base = base or {}
+    extra = extra or {}
+    if not base:
+        return dict(extra)
+    if not extra:
+        return dict(base)
+    if set(base) & set(extra):
+        return {"$and": [base, extra]}
+    merged = dict(base)
+    merged.update(extra)
+    return merged
 
 
 def validate_configs(configs: dict[str, Any]) -> None:

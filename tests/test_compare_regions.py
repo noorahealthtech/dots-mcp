@@ -10,10 +10,15 @@ async def test_compare_regions_symmetric_samples():
         "Karnataka", "Punjab", content_types=["articles"], sample_size=6
     )
     assert result["shared_tag_type"] == "states"
-    assert result["region_a"]["resolved_tag"]["source"] == "cache"   # Karnataka cached
-    assert result["region_b"]["resolved_tag"]["source"] == "mock"    # Punjab fallback
+    assert result["region_a"]["resolved_tag"]["value"] == "karnataka"
+    assert result["region_b"]["resolved_tag"]["value"] == "punjab"
     assert len(result["region_a"]["documents"]) == 6
     assert len(result["region_b"]["documents"]) == 6
+    # Each region's docs actually carry that region's tag.
+    assert all(
+        d["tags"]["states"]["data"][0]["display"] == "Karnataka"
+        for d in result["region_a"]["documents"]
+    )
 
 
 async def test_compare_regions_with_period():

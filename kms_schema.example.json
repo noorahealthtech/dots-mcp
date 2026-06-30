@@ -1,47 +1,38 @@
 {
-  "_comment": "Local, developer-maintained description of what is queryable in your KMS tenant. The getData API has no live discovery endpoint, so this file is the source of truth for content/profile/tag types and for cached tag name -> ObjectId mappings used by filters. Copy this to kms_schema.json (or point KMS_SCHEMA_PATH at your own) and edit. Values seeded here are illustrative examples taken from the API documentation.",
+  "_comment": "Template for kms_schema.json — the source of truth for what is queryable, since the getData API has no discovery endpoint. Generate the real file from your live tenant with `uv run python scripts/build_schema.py`, or copy this template and edit. Tag filtering uses findQuery on tags.<collection>.data.<filter_field>; `values` maps a human display name to that field's id (a tagId slug for most collections, or _id for slug-less ones like nooraUsers). `content_types` on each tag_type lists which content types actually carry that collection. Values below are illustrative.",
   "content_types": [
-    { "id": "articles", "name": "Articles", "description": "Long-form knowledge articles." },
-    { "id": "stories", "name": "Stories", "description": "Field stories, often with an author reference at meta.kp_contributed_by." },
-    { "id": "reports", "name": "Reports", "description": "Reports and structured documents." }
+    { "id": "reports", "name": "Reports", "description": "Field/program activity reports.", "count": 300 },
+    { "id": "routineVisits", "name": "Routine Visits", "description": "Routine visit records.", "count": 6102 },
+    { "id": "successStory", "name": "Success Story", "description": "Success stories.", "count": 111 }
   ],
-  "profile_types": [
-    { "id": "volunteers", "name": "Volunteers", "description": "Volunteer user profiles. Often tagged with locations like states." },
-    { "id": "coreTeam", "name": "Core Team", "description": "Core team member profiles." },
-    { "id": "researchers", "name": "Researchers", "description": "Researcher profiles." }
-  ],
+  "profile_types": [],
   "tag_types": [
     {
-      "id": "countries",
-      "name": "Countries",
-      "name_path": "meta.title",
-      "description": "Country tags. Content can be tagged with countries.",
-      "values": {
-        "India": "607f1f77bcf86cd799439011"
-      }
+      "id": "country",
+      "name": "Country",
+      "name_path": "tags.country.data.display",
+      "filter_field": "tagId",
+      "description": "Country tags. Filter with tags={\"country\": [\"Indonesia\"]}.",
+      "values": { "India": "india", "Indonesia": "indonesia", "Bangladesh": "bangladesh", "Nepal": "nepal" },
+      "content_types": ["reports", "routineVisits", "successStory"]
     },
     {
-      "id": "states",
-      "name": "States",
-      "name_path": "meta.title",
-      "description": "State tags (e.g. for rollups: cities -> states -> countries).",
-      "values": {
-        "Karnataka": "673d8531d6ef55f9b7958e6d"
-      }
+      "id": "conditionAreas",
+      "name": "Condition Area",
+      "name_path": "tags.conditionAreas.data.display",
+      "filter_field": "tagId",
+      "description": "Clinical condition-area tags.",
+      "values": { "Antenatal Care (ANC)": "antenatal_care_anc", "Non-Communicable Diseases": "non_communicable_diseases" },
+      "content_types": ["reports"]
     },
     {
-      "id": "cities",
-      "name": "Cities",
-      "name_path": "meta.title",
-      "description": "City tags. Content is often tagged at the city level.",
-      "values": {}
-    },
-    {
-      "id": "category",
-      "name": "Category",
-      "name_path": "meta.title",
-      "description": "Content category tags.",
-      "values": {}
+      "id": "nooraUsers",
+      "name": "Noora User",
+      "name_path": "tags.nooraUsers.data.display",
+      "filter_field": "_id",
+      "description": "Staff who authored/are referenced. Slug-less, so filtered by _id.",
+      "values": { "Example Person": "66ebe2051313b20c9f35c72b" },
+      "content_types": ["reports", "routineVisits"]
     }
   ]
 }

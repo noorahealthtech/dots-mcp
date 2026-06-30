@@ -69,11 +69,14 @@ def test_bad_timeout_falls_back_to_default(monkeypatch):
     assert settings.timeout == 30.0
 
 
-def test_schema_loads_packaged_default():
+def test_schema_loads_packaged_default(tmp_path, monkeypatch):
+    # Run from a clean cwd so the packaged-default fallback is reached (not a developer's
+    # generated ./kms_schema.json).
+    monkeypatch.chdir(tmp_path)
     schema = load_schema(None)
     ids = {c["id"] for c in schema["content_types"]}
     assert "articles" in ids
-    assert resolve_tag_from_cache(schema, "states", "Karnataka") == "673d8531d6ef55f9b7958e6d"
+    assert resolve_tag_from_cache(schema, "states", "Karnataka") == "karnataka"
     # Case-insensitive lookup works too.
-    assert resolve_tag_from_cache(schema, "states", "karnataka") == "673d8531d6ef55f9b7958e6d"
+    assert resolve_tag_from_cache(schema, "states", "karnataka") == "karnataka"
     assert resolve_tag_from_cache(schema, "states", "Nowhere") is None

@@ -34,12 +34,17 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
 - `getdata_client.py` — `KmsClient` (real async httpx) + `build_client(settings)` factory +
   `KmsClientProtocol`. Owns the double-stringify and error parsing.
 - `mock_client.py` — `MockKmsClient`: deterministic sample data so the server works without creds.
-  Honors `useCountDAL` (count-only), `facet` (buckets), and `find_query._id` (`$in`/string/`$ne`);
-  docs carry a synthetic `tags` field so related/population demos work.
-- `configs.py` — `build_configs()` (pure kwarg→API-field mapper, with `extra=` passthrough for
-  facet/useCountDAL/population) + `validate_configs()` + `tag_filter()` / `date_range_filter()` helpers.
-- `schema.py` — loads the developer-maintained `kms_schema.json` (discovery + tag-ID cache);
-  `extract_doc_tag_ids()` (best-effort, for `related_documents`).
+  Honors `useCountDAL` (count-only), `facet` (buckets), and a mini-Mongo `findQuery` matcher
+  (`_doc_matches`) for tag filters (`tags.<coll>.data.<field>`), `_id` (`$in`/string/`$ne`), date
+  ranges, `$and`/`$or`. Docs carry realistic `tags` (display+tagId+_id) + `kp_date_created`.
+- `configs.py` — `build_configs()` (pure kwarg→API-field mapper, `extra=` passthrough) +
+  `validate_configs()` + **`tag_query()`** (display/slug → findQuery on `tags.<coll>.data.<field>`),
+  **`date_query()`**, `merge_find_query()`. `tag_filter()`/`date_range_filter()` are DEPRECATED
+  (activeFilters shape — rejected by the live API).
+- `schema.py` — loads the developer-maintained `kms_schema.json`; `extract_doc_tag_ids()`
+  (best-effort tag `_id`s, for `related_documents`).
+- `scripts/build_schema.py` — regenerates `kms_schema.json` from the live tenant (content types +
+  counts + harvested tag `values`). Re-run to refresh.
 - `settings.py` — `Settings.from_env()`; auto-mock when creds absent.
 - `errors.py` — `KmsError` / `KmsConfigError` / `KmsApiError` / `KmsAuthError`.
 
@@ -54,9 +59,21 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
   invariants, examples). Keep them rich and accurate when you change a tool signature.
 - **content vs profile:** every query needs exactly one of `contentTypes` / `profileTypes`
   (mutually exclusive). `validate_configs` enforces it in both clients.
-- **Tag-ID problem:** filters need Mongo ObjectIds, not names. The local `kms_schema.json`
-  (name→id cache) is authoritative; `resolve_tag`'s live fallback is **speculative** (the API
-  has no documented tags endpoint) — don't rely on it without verifying against a real tenant.
+- **Tag filtering = `findQuery`, NOT activeFilters.** The documented `activeFilters`/`tagType`
+  shape returns HTTP 500 on the live API. Real filtering is Mongo `findQuery` on
+  `tags.<collection>.data.<field>` where field is `tagId` (slug) for most collections or `_id`
+  for slug-less ones (e.g. `nooraUsers`); `display` also matches. Build it with `tag_query()`;
+  the `tags=` param on the query tools is the model-facing entry point. Verified live (e.g.
+  `tags.country.data.tagId $in ["indonesia"]` → 42 reports).
+- **Content-type spelling:** ids are exactly as the API spells them, not the web-UI URL — e.g.
+  `organisationalReports` (API, British "s") vs `organizationalReports` (UI URL, 401s). Confirm
+  any new id with a 200 (`scripts/build_schema.py` warns on unreadable ids).
+- **No discovery / profiles:** the API can't enumerate types and every `profileType` returns
+  empty for this token, so `kms_schema.json` is curated (via `build_schema.py`) and
+  `profile_types` is `[]`. Tag vocabularies differ by content type (see each tag type's
+  `content_types`).
+- **`createdAt` doesn't exist** in this data — date filtering uses `kp_date_created`
+  (`compare_regions` defaults to it).
 - **Tools catch `KmsError` and re-raise as `ValueError`** with a readable message so the model
   sees a recoverable tool error.
 - Mock mode is automatic when `KMS_AUTH_TOKEN`/`KMS_TENANT` are unset (override with `KMS_MOCK`).

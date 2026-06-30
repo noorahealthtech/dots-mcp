@@ -34,6 +34,67 @@ _TOPICS = [
     "mental wellbeing",
 ]
 
+# Deterministic tag vocabularies (display, tagId) matching the packaged default schema,
+# so tag findQuery filtering is exercised in mock mode.
+_COUNTRIES = [("India", "india"), ("Indonesia", "indonesia"), ("Bangladesh", "bangladesh")]
+_STATES = [("Karnataka", "karnataka"), ("Punjab", "punjab"), ("Maharashtra", "maharashtra")]
+_CONDITIONS = [("Antenatal Care (ANC)", "antenatal_care_anc"), ("Newborn Care", "newborn_care")]
+
+
+def _values_at(node: Any, parts: list[str]) -> list[Any]:
+    """Resolve a dotted path, flattening through arrays (mini-Mongo path lookup)."""
+    if not parts:
+        return [node]
+    if isinstance(node, list):
+        out: list[Any] = []
+        for item in node:
+            out.extend(_values_at(item, parts))
+        return out
+    if isinstance(node, dict) and parts[0] in node:
+        return _values_at(node[parts[0]], parts[1:])
+    return []
+
+
+def _match_field(values: list[Any], cond: Any) -> bool:
+    """Match the actual values at a path against a scalar or operator condition."""
+    if isinstance(cond, dict):
+        for op, operand in cond.items():
+            if op == "$in":
+                if not any(v in operand for v in values):
+                    return False
+            elif op == "$ne":
+                if any(v == operand for v in values):
+                    return False
+            elif op == "$gte":
+                if not any(isinstance(v, str) and v >= operand for v in values):
+                    return False
+            elif op == "$lte":
+                if not any(isinstance(v, str) and v <= operand for v in values):
+                    return False
+            elif op == "$elemMatch":
+                # values here are the array elements; each is matched as a sub-doc.
+                if not any(_doc_matches(v, operand) for v in values if isinstance(v, dict)):
+                    return False
+            else:
+                return False
+        return True
+    return cond in values
+
+
+def _doc_matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
+    """Evaluate a findQuery (incl. $and/$or and dotted tag/date paths) against a doc."""
+    for key, cond in query.items():
+        if key == "$and":
+            if not all(_doc_matches(doc, sub) for sub in cond):
+                return False
+        elif key == "$or":
+            if not any(_doc_matches(doc, sub) for sub in cond):
+                return False
+        else:
+            if not _match_field(_values_at(doc, key.split(".")), cond):
+                return False
+    return True
+
 
 def _object_id(seed: str) -> str:
     """A deterministic 24-hex-char id that looks like a Mongo ObjectId."""
@@ -64,7 +125,14 @@ class MockKmsClient:
         # --- Count-only / faceting mode (useCountDAL) ---
         # count_only and facet_counts hit this branch: no documents are fetched.
         if configs.get("useCountDAL") or facets:
-            result: dict[str, Any] = {"count": _TOTAL}
+            if find_query:
+                n = sum(
+                    1 for i in range(_TOTAL)
+                    if _doc_matches(self._doc(primary, i, search_term), find_query)
+                )
+            else:
+                n = _TOTAL
+            result: dict[str, Any] = {"count": n}
             if facets:
                 result["facets"] = self._facets(facets)
                 result["data"] = []
@@ -84,9 +152,10 @@ class MockKmsClient:
         want_count = configs.get("countData", True)
 
         all_docs = [self._doc(primary, i, search_term) for i in range(_TOTAL)]
-        # Honor a {"_id": {"$ne": id}} exclusion (used by related_documents).
-        if isinstance(id_cond, dict) and "$ne" in id_cond:
-            all_docs = [d for d in all_docs if d["_id"] != id_cond["$ne"]]
+        # Honor findQuery conditions: tag filters (tags.<coll>.data.<field>), the
+        # {"_id": {"$ne": id}} exclusion used by related_documents, date ranges, $and/$or.
+        if find_query:
+            all_docs = [d for d in all_docs if _doc_matches(d, find_query)]
 
         if limit is None:
             page = all_docs[skip:]
@@ -126,6 +195,9 @@ class MockKmsClient:
             title = f"{search_term.title()}: {topic} ({type_id} #{index + 1})"
         else:
             title = f"{topic.title()} ({type_id} #{index + 1})"
+        country = _COUNTRIES[index % len(_COUNTRIES)]
+        state = _STATES[index % len(_STATES)]
+        cond = _CONDITIONS[index % len(_CONDITIONS)]
         return {
             "_id": _object_id(f"{type_id}:{index}"),
             "meta": {
@@ -135,11 +207,21 @@ class MockKmsClient:
                     "Replace with live results by setting KMS_AUTH_TOKEN/KMS_TENANT."
                 ),
             },
-            # Deterministic tag references so related_documents / population demos work.
+            # Deterministic tag groups (display + tagId + _id) so findQuery tag filters,
+            # related_documents, and population demos work in mock mode.
             "tags": {
-                "category": {"data": [{"_id": _object_id(f"category:{index % 4}")}]},
-                "states": {"data": [{"_id": _object_id(f"states:{index % 5}")}]},
+                "country": {"collectionId": "country", "data": [
+                    {"display": country[0], "tagId": country[1],
+                     "_id": _object_id(f"country:{country[1]}")}]},
+                "states": {"collectionId": "states", "data": [
+                    {"display": state[0], "tagId": state[1],
+                     "_id": _object_id(f"states:{state[1]}")}]},
+                "conditionAreas": {"collectionId": "conditionAreas", "data": [
+                    {"display": cond[0], "tagId": cond[1],
+                     "_id": _object_id(f"conditionAreas:{cond[1]}")}]},
             },
+            "kp_published_status": "published" if index % 3 == 0 else "draft",
+            "kp_date_created": _iso(index),
             "createdAt": _iso(index),
             "updatedAt": _iso(index + 1),
         }

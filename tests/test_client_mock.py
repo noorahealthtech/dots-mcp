@@ -57,6 +57,28 @@ async def test_deterministic_ids():
     assert [d["_id"] for d in a["data"]] == [d["_id"] for d in b["data"]]
 
 
+async def test_tag_findquery_filters_documents():
+    client = MockKmsClient()
+    result = await client.get_data({
+        "contentTypes": ["articles"],
+        "findQuery": {"tags.states.data.tagId": {"$in": ["karnataka"]}},
+        "limit": 50, "countData": True,
+    })
+    # 47 docs cycle through 3 states; "karnataka" hits indices where i % 3 == 0.
+    assert result["count"] == 16
+    assert result["data"]
+    assert all(d["tags"]["states"]["data"][0]["tagId"] == "karnataka" for d in result["data"])
+
+
+async def test_tag_findquery_count_only_respects_filter():
+    client = MockKmsClient()
+    result = await client.get_data({
+        "contentTypes": ["articles"], "useCountDAL": True,
+        "findQuery": {"tags.country.data.tagId": {"$in": ["india"]}},
+    })
+    assert result["count"] == 16  # india at i % 3 == 0
+
+
 async def test_validation_still_fires():
     client = MockKmsClient()
     with pytest.raises(KmsConfigError):
