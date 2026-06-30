@@ -27,6 +27,13 @@ DEFAULT_WEB_URL = "https://knowledge.noorahealth.org"
 GETDATA_PATH = "/api/discovery/getData"
 DEFAULT_TIMEOUT = 30.0
 
+# Transport defaults. stdio keeps Claude Desktop working unchanged; streamable-http
+# is the remote-connector mode. Host/port apply only under an HTTP transport.
+DEFAULT_TRANSPORT = "stdio"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
+_HTTP_TRANSPORTS = {"streamable-http", "sse"}
+
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
 
@@ -54,10 +61,22 @@ class Settings:
     mock: bool
     schema_path: str | None
     timeout: float
+    # Transport (defaulted so existing callers constructing Settings directly,
+    # e.g. the test fixtures, keep working without these kwargs).
+    transport: str = DEFAULT_TRANSPORT
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
+    stateless_http: bool = True
+    json_response: bool = True
 
     @property
     def getdata_url(self) -> str:
         return self.base_url.rstrip("/") + GETDATA_PATH
+
+    @property
+    def is_http(self) -> bool:
+        """True when running under an HTTP-based (remote) transport."""
+        return self.transport in _HTTP_TRANSPORTS
 
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> "Settings":
@@ -77,6 +96,25 @@ class Settings:
         except ValueError:
             timeout = DEFAULT_TIMEOUT
 
+        transport = (
+            (os.environ.get("KMS_TRANSPORT") or "").strip().lower() or DEFAULT_TRANSPORT
+        )
+        host = (os.environ.get("KMS_HOST") or "").strip() or DEFAULT_HOST
+
+        # KMS_PORT, else the conventional $PORT, else the default.
+        port_raw = (
+            (os.environ.get("KMS_PORT") or "").strip()
+            or (os.environ.get("PORT") or "").strip()
+        )
+        try:
+            port = int(port_raw) if port_raw else DEFAULT_PORT
+        except ValueError:
+            port = DEFAULT_PORT
+
+        # Default both on (None -> True); only an explicit falsy value turns them off.
+        stateless_http = _env_bool(os.environ.get("KMS_STATELESS_HTTP")) is not False
+        json_response = _env_bool(os.environ.get("KMS_JSON_RESPONSE")) is not False
+
         has_creds = bool(token and tenant)
         explicit_mock = _env_bool(os.environ.get("KMS_MOCK"))
         if explicit_mock is None:
@@ -93,6 +131,11 @@ class Settings:
             mock=mock,
             schema_path=schema_path,
             timeout=timeout,
+            transport=transport,
+            host=host,
+            port=port,
+            stateless_http=stateless_http,
+            json_response=json_response,
         )
         settings._warn_if_inconsistent()
         return settings

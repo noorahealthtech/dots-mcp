@@ -1,0 +1,15 @@
+# Keep secrets and local cruft out of the build context / image.
+.env
+.git
+.venv
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tmp/
+*.log
+.DS_Store
+# Local scratch / plans
+scratchpad/
+# Env-specific deploy artifacts (not needed inside the image)
+deploy/

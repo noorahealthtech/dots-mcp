@@ -5,8 +5,10 @@ Guidance for Claude Code when working in this repo.
 ## What this is
 
 `dots-kms-mcp` — a Python **MCP server** (FastMCP, official `mcp[cli]` 1.x) that wraps the
-Noora KMS `getData` discovery API as chat-callable tools, run locally over **stdio** for
-Claude Desktop / Claude Code. The model retrieves on demand ("agentic RAG over an API").
+Noora KMS `getData` discovery API as chat-callable tools. Runs **two ways from the same
+code**: locally over **stdio** (Claude Desktop / Claude Code, the default) and as a
+**remote connector over Streamable HTTP** with Google-delegated OAuth (claude.ai web,
+other MCP clients). The model retrieves on demand ("agentic RAG over an API").
 
 The single endpoint `POST {base}/api/discovery/getData` is documented in the tool
 docstrings and the conventions below — treat those as the source of truth. The canonical
@@ -17,20 +19,33 @@ API docs live at `https://knowledge.noorahealth.org/platformBuilder/apiDocumenta
 
 ```bash
 uv sync                                      # install deps + create venv
-uv run pytest                                # run the test suite (34 tests, no creds needed)
+uv run pytest                                # run the test suite (no creds needed)
 uv run pytest tests/test_double_stringify.py # run one test file
 uv run dots-kms-mcp                          # run the stdio server (console script)
 uv run python -m dots_kms_mcp                # same, via module
 uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
+
+# Remote (HTTP) mode — served at http://HOST:PORT/mcp; add OAuth via GOOGLE_CLIENT_*.
+KMS_TRANSPORT=streamable-http KMS_PORT=8000 uv run dots-kms-mcp
 ```
+
+Deploy = Docker Compose (`docker-compose.yml` at root) behind your own nginx; see README "Remote deployment".
 
 ## Architecture (src/dots_kms_mcp/)
 
 - `server.py` — the FastMCP instance, **14 `@mcp.tool`s**, **3 `@mcp.prompt`s**
   (`kms_compare`/`kms_research`/`kms_brief`), and resources (`kms://schema` static +
-  `kms://content-type/{id}` & `kms://recent/{content_type}` templated), plus `main()` (stdio).
-  Internal helpers `_resolve_tag()` and `_collect()` are shared by several tools. Tools resolve
-  settings/client/schema once at import.
+  `kms://content-type/{id}` & `kms://recent/{content_type}` templated), plus `main()` (transport
+  from settings). Internal helpers `_resolve_tag()` and `_collect()` are shared by several tools.
+  Tools resolve settings/client/schema once at import. **Settings are resolved BEFORE the
+  `FastMCP(...)` construction** so HTTP host/port (and, under HTTP, the OAuth `auth_server_provider`
+  + `auth`) can be passed in; the Google callback is registered via `@mcp.custom_route`.
+- `auth.py` — the **OAuth bridge** for remote mode. `GoogleBridgeProvider` (an
+  `OAuthAuthorizationServerProvider`) delegates login to Google, enforces
+  `KMS_ALLOWED_EMAIL_DOMAINS` (`is_allowed_identity`), and mints this server's **own
+  audience-bound** opaque tokens (the "token swap" — the Google token is never passed through).
+  `build_auth(settings)` returns wiring (provider + `AuthSettings` + callback path) or `None` when
+  OAuth isn't configured. In-memory token store (single VM; restart = re-auth).
 - `getdata_client.py` — `KmsClient` (real async httpx) + `build_client(settings)` factory +
   `KmsClientProtocol`. Owns the double-stringify and error parsing.
 - `mock_client.py` — `MockKmsClient`: deterministic sample data so the server works without creds.
@@ -47,8 +62,14 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
   (web-app deep link `{KMS_WEB_URL}/published-page/{contentType}?id={_id}`).
 - `scripts/build_schema.py` — regenerates `kms_schema.json` from the live tenant (content types +
   counts + harvested tag `values`). Re-run to refresh.
-- `settings.py` — `Settings.from_env()`; auto-mock when creds absent.
+- `settings.py` — `Settings.from_env()`; auto-mock when creds absent. Also carries the
+  transport knobs (`transport`/`host`/`port`/`stateless_http`/`json_response`, env
+  `KMS_TRANSPORT`/`KMS_HOST`/`KMS_PORT`/…) and `is_http`.
 - `errors.py` — `KmsError` / `KmsConfigError` / `KmsApiError` / `KmsAuthError`.
+- `Dockerfile` / `.dockerignore` / `docker-compose.yml` (repo root, committed) — the container
+  deploy path; compose publishes a loopback port for an external nginx to proxy (TLS). `deploy/`
+  holds env-specific local-only bits (e.g. `nginx.conf.example`) and is **gitignored**. See
+  README "Remote deployment".
 
 ## Conventions & gotchas (read before editing)
 
@@ -56,7 +77,16 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
   is a JSON *string*, not an object. This lives ONLY in `KmsClient.get_data`; `build_configs`
   returns a plain dict. `tests/test_double_stringify.py` guards it.
 - **stdout is the protocol channel** under stdio. NEVER `print()` to stdout — all diagnostics
-  go to `sys.stderr`.
+  go to `sys.stderr`. (This caveat is **stdio-only**; under the HTTP transport stdout isn't the
+  channel, but keep diagnostics on stderr anyway for consistency.)
+- **Transport is env-driven, stdio by default.** `KMS_TRANSPORT=streamable-http` serves the
+  remote connector at `/mcp`; `main()` dispatches `mcp.run(transport=...)`. Adding HTTP/auth was
+  **additive** — the default stdio/mock path (and the whole test suite) is unaffected.
+- **OAuth: Google is the IdP, not the MCP authorization server.** The MCP spec (2025-06-18)
+  requires audience-bound tokens (RFC 8707) that the server validates as issued *for itself*;
+  Google can't mint those, so `auth.py` runs an in-process AS that delegates *login* to Google and
+  issues its own tokens. `load_access_token` enforces the audience + expiry checks (the spec MUST);
+  the SDK handles PKCE/redirect/client-auth. Never pass the upstream Google token to the MCP layer.
 - **Tool docstrings are the model's interface.** They carry the full contract (params,
   invariants, examples). Keep them rich and accurate when you change a tool signature.
 - **content vs profile:** every query needs exactly one of `contentTypes` / `profileTypes`
@@ -90,7 +120,9 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
 ## Secrets
 
 `.env` and `kms_schema.json` are gitignored — never commit tokens. Config is env-driven; see
-`.env.example` and the README.
+`.env.example` and the README. Remote mode adds more secrets to `.env` (never the image/repo):
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (the OAuth bridge) alongside `KMS_AUTH_TOKEN`. On the VM
+the `.env` is `chmod 600`, service-user-owned.
 
 ## Testing
 

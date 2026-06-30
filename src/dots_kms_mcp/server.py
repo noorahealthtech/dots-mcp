@@ -14,6 +14,7 @@ from typing import Any, NoReturn
 
 from mcp.server.fastmcp import FastMCP
 
+from .auth import build_auth
 from .configs import build_configs, date_query, merge_find_query, tag_query
 from .errors import KmsError
 from .getdata_client import build_client
@@ -29,9 +30,17 @@ from .schema import (
 )
 from .settings import Settings
 
-mcp = FastMCP(
-    "dots-kms",
-    instructions=(
+# Resolve settings first (it logs the chosen mock/live mode to stderr) so the
+# FastMCP instance can be configured with the HTTP host/port for remote mode.
+_settings = Settings.from_env()
+
+# Under the HTTP transport the connector may require OAuth (Google-delegated). Under
+# stdio there is no auth — the spec says stdio takes creds from the environment — so
+# the bridge is only built for HTTP, which also keeps the mock/stdio test path clean.
+_auth = build_auth(_settings) if _settings.is_http else None
+
+_fastmcp_kwargs: dict[str, Any] = {
+    "instructions": (
         "Every document returned by these tools includes a `source_url` — a clickable link "
         "to that document's page in the KMS web app — and, when include_attachments is set "
         "or via document_attachments, an `attachments` list of file URLs (PDFs, images, "
@@ -39,11 +48,41 @@ mcp = FastMCP(
         "its source_url (and relevant attachments) as clickable markdown links so the user "
         "can verify it. Never invent a source_url; only use ones present in tool results."
     ),
-)
+    # HTTP-transport settings (ignored under stdio). bind + streaming behaviour.
+    "host": _settings.host,
+    "port": _settings.port,
+    "stateless_http": _settings.stateless_http,
+    "json_response": _settings.json_response,
+}
+if _auth is not None:
+    _fastmcp_kwargs["auth_server_provider"] = _auth.provider
+    _fastmcp_kwargs["auth"] = _auth.auth_settings
 
-# Resolve settings + client + schema once at import time. Settings.from_env logs
-# the chosen mode (mock vs live) to stderr.
-_settings = Settings.from_env()
+mcp = FastMCP("dots-kms", **_fastmcp_kwargs)
+
+if _auth is not None:
+    # The Google OAuth redirect lands here; we complete the login (domain check + mint
+    # our own code) and redirect the user-agent back to the MCP client. This is the
+    # custom return-flow handler the provider's authorize() step expects.
+    from mcp.server.auth.provider import AuthorizeError
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, RedirectResponse
+
+    _provider = _auth.provider
+
+    @mcp.custom_route(_auth.callback_path, methods=["GET"])
+    async def _google_oauth_callback(request: "Request"):
+        try:
+            location = await _provider.complete_google_login(
+                request.query_params.get("code"), request.query_params.get("state")
+            )
+        except AuthorizeError as exc:
+            return JSONResponse(
+                {"error": exc.error, "error_description": exc.error_description},
+                status_code=400,
+            )
+        return RedirectResponse(location, status_code=302)
+
 _client = build_client(_settings)
 
 # Hard ceiling on how many documents `collect` will pull, to protect context size.
@@ -795,12 +834,33 @@ async def recent_resource(content_type: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    """Console entry point: run the server over stdio."""
-    print(
-        f"[dots-kms-mcp] starting (mock={_settings.mock}) — stdio transport.",
-        file=sys.stderr,
-    )
-    mcp.run(transport="stdio")
+    """Console entry point: run the server over the configured transport.
+
+    Defaults to stdio (Claude Desktop / local). Set ``KMS_TRANSPORT=streamable-http``
+    (plus ``KMS_HOST``/``KMS_PORT``) to serve the remote MCP connector over HTTP.
+    """
+    transport = _settings.transport
+    if _settings.is_http:
+        where = f"http://{_settings.host}:{_settings.port}/mcp"
+        auth_state = "OAuth ON" if _auth is not None else "NO AUTH"
+        print(
+            f"[dots-kms-mcp] starting (mock={_settings.mock}) — {transport} on {where} "
+            f"[{auth_state}].",
+            file=sys.stderr,
+        )
+        if _auth is None:
+            print(
+                "[dots-kms-mcp] WARNING: HTTP transport with NO authentication — the /mcp "
+                "endpoint is OPEN. Set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (+ KMS_PUBLIC_URL) "
+                "to enable the OAuth bridge before exposing real data publicly.",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"[dots-kms-mcp] starting (mock={_settings.mock}) — {transport} transport.",
+            file=sys.stderr,
+        )
+    mcp.run(transport=transport)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

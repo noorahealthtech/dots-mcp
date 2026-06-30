@@ -196,6 +196,115 @@ claude mcp add dots-kms -e KMS_MOCK=1 -- \
 
 (Swap `-e KMS_MOCK=1` for `-e KMS_AUTH_TOKEN=... -e KMS_TENANT=...` to go live.)
 
+## Remote deployment (VM) — a shared connector for Claude web & others
+
+The two sections above run the server **locally over stdio** (one machine, Claude
+Desktop). To make it a **publicly reachable connector** that anyone can add to
+**claude.ai (web/Cowork)**, Claude Team/Enterprise org connectors, or other MCP
+clients (ChatGPT connectors, Cursor, VS Code), run it over **Streamable HTTP** behind
+TLS, with **OAuth** so only your people can use it. Same code, different transport.
+
+**1. Switch transport.** Set in `.env` (see `.env.example` for all knobs):
+
+```bash
+KMS_TRANSPORT=streamable-http
+KMS_HOST=127.0.0.1            # bind to loopback; nginx is the only public listener
+KMS_PORT=8000
+KMS_PUBLIC_URL=https://dots.mcp.noorahealth.org   # public HTTPS base (no trailing slash)
+KMS_AUTH_TOKEN=...            # the shared KMS service token
+KMS_TENANT=nkms
+```
+
+The MCP endpoint is then served at `${KMS_PUBLIC_URL}/mcp`.
+
+**2. Turn on OAuth (Google-delegated).** Claude's web connector authenticates via
+OAuth — there's no place to paste a header — so a public deployment needs it. Reuse
+your **existing Google OAuth client**: it logs the human in (restricted to your
+Workspace domain); a thin in-process bridge then mints this server's *own*
+audience-bound token (Google's token is never passed through). Add to `.env`:
+
+```bash
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+KMS_ALLOWED_EMAIL_DOMAINS=noorahealth.org   # only these domains may obtain a token
+```
+
+In the Google Cloud console, add these **Authorized redirect URIs** to that client:
+
+```
+https://claude.ai/api/mcp/auth_callback              # Claude's callback
+https://dots.mcp.noorahealth.org/auth/google/callback # this server's callback
+```
+
+> Why a bridge and not Google directly? The MCP spec requires the server to validate
+> that a token was minted **for it** (RFC 8707 audience binding); Google can't issue
+> such a token, so a small authorization-server shim (the SDK's `auth_server_provider`,
+> implemented in `src/dots_kms_mcp/auth.py`) sits in front and delegates login to
+> Google. See `CLAUDE.md` for the details.
+
+**3. Run it (Docker Compose).** Build the image ([`Dockerfile`](Dockerfile)) and run the
+container; your own nginx terminates TLS and proxies to it. The container publishes a
+**loopback** port so only nginx can reach it:
+
+```yaml
+# docker-compose.yml
+services:
+  dots-kms-mcp:
+    build: { context: ., dockerfile: Dockerfile }
+    restart: unless-stopped
+    env_file: [ .env ]                 # KMS_* + GOOGLE_* secrets (keep chmod 600)
+    environment:
+      KMS_TRANSPORT: streamable-http
+      KMS_HOST: "0.0.0.0"
+      KMS_PORT: "8000"
+    ports: [ "127.0.0.1:8000:8000" ]   # nginx proxies to http://127.0.0.1:8000
+```
+
+```bash
+docker compose up -d --build
+docker compose logs -f                 # diagnostics (the app logs to stderr)
+```
+
+Point an nginx `server` block (TLS via `certbot`) at the published port. The settings
+that matter for MCP's streaming transport:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_buffering off;               # required — don't buffer Streamable HTTP / SSE
+    proxy_read_timeout 3600s;
+}
+```
+
+> `docker-compose.yml` + `Dockerfile` are committed; keep your environment-specific nginx
+> config and `.env` out of git (`deploy/` is **gitignored** for local copies). If you'd
+> rather run nginx in the same compose, drop the `ports:` mapping and proxy to
+> `http://dots-kms-mcp:8000` over the compose network.
+
+**4. Verify** the OAuth handshake is live:
+
+```bash
+curl -s https://dots.mcp.noorahealth.org/.well-known/oauth-protected-resource/mcp
+curl -s https://dots.mcp.noorahealth.org/.well-known/oauth-authorization-server
+curl -i https://dots.mcp.noorahealth.org/mcp      # -> 401 + WWW-Authenticate (expected)
+```
+
+**5. Add the connector.**
+
+- **claude.ai (Pro/Max):** Settings → Connectors → *Add custom connector* →
+  `https://dots.mcp.noorahealth.org/mcp` → sign in with your Noora Google account.
+- **Team/Enterprise:** an **Owner** adds it under Organization settings → Connectors;
+  members then connect individually (each does the Google sign-in).
+- **Other MCP clients:** same URL — e.g. `claude mcp add --transport http dots-kms https://dots.mcp.noorahealth.org/mcp`.
+
+**Credentials model:** one **shared** KMS service token (in `.env`), so every connector
+user sees that token's clearance. OAuth gates *who* can reach the server; it does not
+map to per-user KMS clearance (that's a future enhancement). Tokens the bridge issues
+are opaque and held **in memory** — a restart just forces users to re-authenticate.
+
 ## Tools, prompts & resources
 
 Exercises all three MCP primitives: **Tools** (model-called), **Prompts** (user-triggered
@@ -243,14 +352,22 @@ uv run pytest
 Covers the configs builder, the **double-stringify on the wire** (via `respx`),
 error/auth parsing, the mock client (pagination, search, determinism), settings
 resolution, the group A/B tools (count/facet, `collect` pagination & capping,
-tag-name search, region compare, batch/related fetch), and prompt/resource
-registration. 52 tests, no live credentials required.
+tag-name search, region compare, batch/related fetch), attachments/citations, the
+**transport selection** (stdio vs streamable-http), the **OAuth bridge** (domain
+restriction, audience binding, token rotation), and prompt/resource registration. No
+live credentials required.
 
 ## Security
 
 - Never commit secrets. `.env` and `kms_schema.json` are gitignored.
 - Prefer the `env` block / `.env` over inlining tokens anywhere shared.
 - Under stdio, **stdout is the protocol channel** — all logging goes to stderr.
+- **Remote deployment:** auth is mandatory before exposing real data — the OAuth
+  bridge restricts access to `KMS_ALLOWED_EMAIL_DOMAINS` and the server only accepts
+  tokens it minted for itself (RFC 8707 audience binding). Keep secrets in a
+  `chmod 600` `.env` on the VM; terminate TLS at nginx; rate-limit at the proxy. The
+  tools are **read-only** (`getData`), so the blast radius is read access of the shared
+  token. Decide whether unpublished drafts should be reachable before going live.
 
 ## Roadmap
 

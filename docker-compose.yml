@@ -1,0 +1,34 @@
+# Runs the dots-kms-mcp remote connector as a container. Your existing nginx
+# terminates TLS and proxies to the published loopback port (see deploy/nginx.conf.example).
+#
+#   docker compose up -d --build
+#   docker compose logs -f          # diagnostics (the app logs to stderr)
+#
+# Secrets come from ./.env (gitignored, chmod 600): KMS_AUTH_TOKEN, KMS_TENANT,
+# KMS_PUBLIC_URL, GOOGLE_CLIENT_ID/SECRET, KMS_ALLOWED_EMAIL_DOMAINS, ...
+# (See .env.example.) They are injected at runtime — never baked into the image.
+
+services:
+  dots-kms-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dots-kms-mcp:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      KMS_TRANSPORT: streamable-http
+      KMS_HOST: 0.0.0.0       # inside the container; only the published port below is reachable
+      KMS_PORT: "8000"
+    ports:
+      # Loopback only — NOT publicly exposed. Your host nginx proxies to http://127.0.0.1:8000.
+      # (If nginx runs in this same compose instead, drop this and proxy to http://dots-kms-mcp:8000.)
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('127.0.0.1',8000)))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
