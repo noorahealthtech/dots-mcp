@@ -121,15 +121,25 @@ type). `search_by_tag_name` and `compare_regions` are one-step convenience wrapp
 ## Run & inspect
 
 ```bash
-# Run the stdio server directly (Ctrl-C to stop)
-uv run dots-kms-mcp
+# Run the stdio server (Ctrl-C to stop)
+uv run dots-kms-mcp                      # console script
+uv run python -m dots_kms_mcp           # equivalent
+
+# Quick CLI tool tester (no client needed)
+uv run python scripts/try_tool.py                       # list tools
+uv run python scripts/try_tool.py count_only '{"content_types": ["reports"], "tags": {"country": ["Indonesia"]}}'
 
 # Explore the tools interactively in the MCP Inspector
 uv run mcp dev src/dots_kms_mcp/server.py
 ```
 
-In the Inspector you can list the tools, see their schemas, and call
-`search_knowledge` / `list_content_types` to view (mock or live) results.
+> Launch it as a **package**, not a loose file — `python src/dots_kms_mcp/server.py`
+> fails with `attempted relative import with no known parent package`. Use the console
+> script or `python -m dots_kms_mcp` above.
+
+In the Inspector (or `scripts/try_tool.py`) you can list the tools, see their schemas,
+and call `search_knowledge` / `list_content_types` to view (mock or live) results.
+Run `try_tool.py <tool>` with no JSON to print that tool's parameters.
 
 ## Wire into Claude Desktop
 
