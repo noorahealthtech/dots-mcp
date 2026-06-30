@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Noora Health" }]
+keywords = ["mcp", "model-context-protocol", "kms", "knowledge-base", "rag", "noora"]
 dependencies = [
     # Pin to the v1 line: a 2.0 alpha exists that may relocate the FastMCP import.
     "mcp[cli]>=1.28,<2",
@@ -15,6 +16,11 @@ dependencies = [
 
 [project.scripts]
 dots-kms-mcp = "dots_kms_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/noorahealthtech/dots-mcp"
+Repository = "https://github.com/noorahealthtech/dots-mcp"
+Issues = "https://github.com/noorahealthtech/dots-mcp/issues"
 
 [dependency-groups]
 dev = [

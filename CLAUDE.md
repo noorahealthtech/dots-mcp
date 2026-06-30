@@ -8,8 +8,10 @@ Guidance for Claude Code when working in this repo.
 Noora KMS `getData` discovery API as chat-callable tools, run locally over **stdio** for
 Claude Desktop / Claude Code. The model retrieves on demand ("agentic RAG over an API").
 
-The complete API spec is the saved page **`Noora KMS.html`** in the repo root — it documents
-the single endpoint `POST {base}/api/discovery/getData`. Treat it as the source of truth.
+The single endpoint `POST {base}/api/discovery/getData` is documented in the tool
+docstrings and the conventions below — treat those as the source of truth. The canonical
+API docs live at `https://knowledge.noorahealth.org/platformBuilder/apiDocumentation`
+(Noora staff only; login-gated).
 
 ## Commands
 

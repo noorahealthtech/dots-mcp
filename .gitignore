@@ -12,12 +12,13 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Build artifacts (`uv build` / `python -m build`)
+dist/
+build/
+
 # uv / venv
 .venv/
 uv.lock.bak
 
 # OS
 .DS_Store
-
-# The saved API doc (Noora KMS.html) stays for reference; ignore its bulky asset dump
-Noora KMS_files/

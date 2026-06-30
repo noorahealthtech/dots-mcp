@@ -34,7 +34,7 @@ double-encoded `configs`, header auth, error parsing) behind clean tools.
 ## Requirements
 
 - Python **3.10+**
-- [`uv`](https://docs.astral.sh/uv/) (installed at `/opt/homebrew/bin/uv` on this machine)
+- [`uv`](https://docs.astral.sh/uv/) (run `which uv` to find its install path — used in the wiring examples below)
 
 ## Install
 
@@ -119,7 +119,7 @@ under the MCP (plug) icon.
     "dots-kms": {
       "command": "/opt/homebrew/bin/uv",
       "args": [
-        "--directory", "/Users/sreeramramasubramanian/Noora Health/dots-mcp",
+        "--directory", "/path/to/dots-mcp",
         "run", "dots-kms-mcp"
       ],
       "env": {
@@ -139,7 +139,7 @@ Use the absolute path to `uv` (Claude Desktop doesn't inherit your shell `PATH`)
 
 ```bash
 claude mcp add dots-kms -e KMS_MOCK=1 -- \
-  /opt/homebrew/bin/uv --directory "/Users/sreeramramasubramanian/Noora Health/dots-mcp" run dots-kms-mcp
+  /opt/homebrew/bin/uv --directory "/path/to/dots-mcp" run dots-kms-mcp
 ```
 
 (Swap `-e KMS_MOCK=1` for `-e KMS_AUTH_TOKEN=... -e KMS_TENANT=...` to go live.)
