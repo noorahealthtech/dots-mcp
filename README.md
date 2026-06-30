@@ -209,7 +209,7 @@ TLS, with **OAuth** so only your people can use it. Same code, different transpo
 ```bash
 KMS_TRANSPORT=streamable-http
 KMS_HOST=127.0.0.1            # bind to loopback; nginx is the only public listener
-KMS_PORT=8000
+KMS_PORT=8900
 KMS_PUBLIC_URL=https://dots.mcp.noorahealth.org   # public HTTPS base (no trailing slash)
 KMS_AUTH_TOKEN=...            # the shared KMS service token
 KMS_TENANT=nkms
@@ -256,8 +256,8 @@ services:
     environment:
       KMS_TRANSPORT: streamable-http
       KMS_HOST: "0.0.0.0"
-      KMS_PORT: "8000"
-    ports: [ "127.0.0.1:8000:8000" ]   # nginx proxies to http://127.0.0.1:8000
+      KMS_PORT: "8900"
+    ports: [ "127.0.0.1:8900:8900" ]   # nginx proxies to http://127.0.0.1:8900
 ```
 
 ```bash
@@ -270,7 +270,7 @@ that matter for MCP's streaming transport:
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8000;
+    proxy_pass http://127.0.0.1:8900;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header Connection "";
@@ -282,7 +282,7 @@ location / {
 > `docker-compose.yml` + `Dockerfile` are committed; keep your environment-specific nginx
 > config and `.env` out of git (`deploy/` is **gitignored** for local copies). If you'd
 > rather run nginx in the same compose, drop the `ports:` mapping and proxy to
-> `http://dots-kms-mcp:8000` over the compose network.
+> `http://dots-kms-mcp:8900` over the compose network.
 
 **4. Verify** the OAuth handshake is live:
 

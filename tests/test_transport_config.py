@@ -35,7 +35,7 @@ def test_transport_defaults_to_stdio(monkeypatch):
     s = Settings.from_env(load_env_file=False)
     assert s.transport == "stdio"
     assert s.host == "127.0.0.1"
-    assert s.port == 8000
+    assert s.port == 8900
     # HTTP-mode niceties default on (simplest single-process behaviour).
     assert s.stateless_http is True
     assert s.json_response is True
@@ -85,7 +85,7 @@ def test_bad_port_falls_back_to_default(monkeypatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("KMS_PORT", "not-a-number")
     s = Settings.from_env(load_env_file=False)
-    assert s.port == 8000
+    assert s.port == 8900
 
 
 def test_stateless_and_json_response_can_be_disabled(monkeypatch):

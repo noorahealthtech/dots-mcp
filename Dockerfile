@@ -2,7 +2,7 @@
 # VM (systemd + nginx, see deploy/); this is here for parity/portability.
 #
 #   docker build -t dots-kms-mcp .
-#   docker run --rm -p 8000:8000 --env-file .env \
+#   docker run --rm -p 8900:8900 --env-file .env \
 #     -e KMS_TRANSPORT=streamable-http -e KMS_HOST=0.0.0.0 dots-kms-mcp
 #
 # Put TLS + a public hostname in front (a reverse proxy / ingress); this image
@@ -33,7 +33,7 @@ USER app
 
 ENV KMS_TRANSPORT=streamable-http \
     KMS_HOST=0.0.0.0 \
-    KMS_PORT=8000
-EXPOSE 8000
+    KMS_PORT=8900
+EXPOSE 8900
 
 CMD ["uv", "run", "--frozen", "dots-kms-mcp"]

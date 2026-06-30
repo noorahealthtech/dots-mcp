@@ -26,7 +26,7 @@ uv run python -m dots_kms_mcp                # same, via module
 uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
 
 # Remote (HTTP) mode — served at http://HOST:PORT/mcp; add OAuth via GOOGLE_CLIENT_*.
-KMS_TRANSPORT=streamable-http KMS_PORT=8000 uv run dots-kms-mcp
+KMS_TRANSPORT=streamable-http KMS_PORT=8900 uv run dots-kms-mcp
 ```
 
 Deploy = Docker Compose (`docker-compose.yml` at root) behind your own nginx; see README "Remote deployment".

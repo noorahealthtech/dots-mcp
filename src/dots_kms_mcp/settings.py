@@ -31,7 +31,7 @@ DEFAULT_TIMEOUT = 30.0
 # is the remote-connector mode. Host/port apply only under an HTTP transport.
 DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8000
+DEFAULT_PORT = 8900
 _HTTP_TRANSPORTS = {"streamable-http", "sse"}
 
 _TRUTHY = {"1", "true", "yes", "on"}
