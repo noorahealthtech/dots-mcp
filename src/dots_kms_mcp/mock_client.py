@@ -57,14 +57,36 @@ class MockKmsClient:
 
         types = configs.get("contentTypes") or configs.get("profileTypes") or []
         primary = types[0] if types else "items"
-
         search_term = configs.get("searchTerm")
+        find_query = configs.get("findQuery") or {}
+        facets = configs.get("facet")
+
+        # --- Count-only / faceting mode (useCountDAL) ---
+        # count_only and facet_counts hit this branch: no documents are fetched.
+        if configs.get("useCountDAL") or facets:
+            result: dict[str, Any] = {"count": _TOTAL}
+            if facets:
+                result["facets"] = self._facets(facets)
+                result["data"] = []
+            return result
+
+        # --- Fetch-by-id (get_document / get_documents) ---
+        id_cond = find_query.get("_id")
+        if isinstance(id_cond, str):
+            return {"data": [self._doc_for_id(primary, id_cond)], "count": 1}
+        if isinstance(id_cond, dict) and "$in" in id_cond:
+            ids = id_cond.get("$in") or []
+            return {"data": [self._doc_for_id(primary, i) for i in ids], "count": len(ids)}
+
+        # --- Normal paginated listing ---
         limit = configs.get("limit")
         skip = int(configs.get("skip") or 0)
         want_count = configs.get("countData", True)
 
-        # Build the full synthetic corpus, then page it.
         all_docs = [self._doc(primary, i, search_term) for i in range(_TOTAL)]
+        # Honor a {"_id": {"$ne": id}} exclusion (used by related_documents).
+        if isinstance(id_cond, dict) and "$ne" in id_cond:
+            all_docs = [d for d in all_docs if d["_id"] != id_cond["$ne"]]
 
         if limit is None:
             page = all_docs[skip:]
@@ -73,14 +95,29 @@ class MockKmsClient:
             limit = int(limit)
             page = all_docs[skip : skip + limit]
             consumed = skip + len(page)
-            next_skip = consumed if consumed < _TOTAL else None
+            next_skip = consumed if consumed < len(all_docs) else None
 
-        result: dict[str, Any] = {"data": page}
+        listing: dict[str, Any] = {"data": page}
         if want_count:
-            result["count"] = _TOTAL
+            listing["count"] = len(all_docs)
         if next_skip is not None:
-            result["skip"] = next_skip
-        return result
+            listing["skip"] = next_skip
+        return listing
+
+    @staticmethod
+    def _facets(facets: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """Deterministic faceted buckets (counts roughly summing to the corpus)."""
+        presets = {
+            "category": [("Maternal Health", 14), ("Newborn Care", 12), ("Nutrition", 11), ("Hygiene", 10)],
+            "states": [("Karnataka", 16), ("Punjab", 12), ("Maharashtra", 10), ("Other", 9)],
+        }
+        default = [("Group A", 18), ("Group B", 15), ("Group C", 14)]
+        out: dict[str, list[dict[str, Any]]] = {}
+        for f in facets:
+            field = f.get("field") or f.get("tagType") or "field"
+            buckets = presets.get(field) or presets.get(f.get("tagType", "")) or default
+            out[field] = [{"value": v, "count": c} for v, c in buckets]
+        return out
 
     @staticmethod
     def _doc(type_id: str, index: int, search_term: str | None) -> dict[str, Any]:
@@ -98,9 +135,22 @@ class MockKmsClient:
                     "Replace with live results by setting KMS_AUTH_TOKEN/KMS_TENANT."
                 ),
             },
+            # Deterministic tag references so related_documents / population demos work.
+            "tags": {
+                "category": {"data": [{"_id": _object_id(f"category:{index % 4}")}]},
+                "states": {"data": [{"_id": _object_id(f"states:{index % 5}")}]},
+            },
             "createdAt": _iso(index),
             "updatedAt": _iso(index + 1),
         }
+
+    @staticmethod
+    def _doc_for_id(type_id: str, doc_id: str) -> dict[str, Any]:
+        """A stable document carrying a caller-requested ``_id`` (for fetch-by-id)."""
+        index = int(_object_id(f"id:{doc_id}"), 16) % _TOTAL
+        doc = MockKmsClient._doc(type_id, index, None)
+        doc["_id"] = doc_id
+        return doc
 
 
 def mock_resolve_tag_candidates(name: str, cached_id: str | None) -> list[dict[str, Any]]:

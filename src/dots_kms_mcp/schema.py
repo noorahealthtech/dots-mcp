@@ -76,6 +76,40 @@ def find_tag_type(schema: dict[str, Any], tag_type_id: str) -> dict[str, Any] | 
     return None
 
 
+def extract_doc_tag_ids(
+    doc: dict[str, Any], tag_type: str | None = None
+) -> dict[str, list[str]]:
+    """Best-effort: pull tag ObjectIds out of a document's ``tags`` field.
+
+    Returns ``{tagType: [ids]}`` (limited to ``tag_type`` when given). Used by
+    related_documents to find docs sharing a source document's tags.
+
+    NOTE: the exact shape of the ``tags`` field is deployment-specific (the docs
+    reference both ``tags.<type>.data._id`` and array forms), so this handles the
+    common shapes and should be confirmed against real documents.
+    """
+    tags = doc.get("tags")
+    out: dict[str, list[str]] = {}
+    if not isinstance(tags, dict):
+        return out
+    items = tags.items() if tag_type is None else [(tag_type, tags.get(tag_type))]
+    for tt, value in items:
+        ids: list[str] = []
+        if isinstance(value, dict):
+            data = value.get("data")
+            if isinstance(data, list):
+                ids = [d["_id"] for d in data if isinstance(d, dict) and d.get("_id")]
+        elif isinstance(value, list):
+            for d in value:
+                if isinstance(d, dict) and d.get("_id"):
+                    ids.append(d["_id"])
+                elif isinstance(d, str):
+                    ids.append(d)
+        if ids:
+            out[tt] = ids
+    return out
+
+
 def resolve_tag_from_cache(
     schema: dict[str, Any], tag_type_id: str, name: str
 ) -> str | None:

@@ -24,13 +24,20 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
 
 ## Architecture (src/dots_kms_mcp/)
 
-- `server.py` — the FastMCP instance, the 7 `@mcp.tool` functions, the `kms://schema`
-  resource, and `main()` (stdio). Tools resolve settings/client/schema once at import.
+- `server.py` — the FastMCP instance, **14 `@mcp.tool`s**, **3 `@mcp.prompt`s**
+  (`kms_compare`/`kms_research`/`kms_brief`), and resources (`kms://schema` static +
+  `kms://content-type/{id}` & `kms://recent/{content_type}` templated), plus `main()` (stdio).
+  Internal helpers `_resolve_tag()` and `_collect()` are shared by several tools. Tools resolve
+  settings/client/schema once at import.
 - `getdata_client.py` — `KmsClient` (real async httpx) + `build_client(settings)` factory +
   `KmsClientProtocol`. Owns the double-stringify and error parsing.
 - `mock_client.py` — `MockKmsClient`: deterministic sample data so the server works without creds.
-- `configs.py` — `build_configs()` (pure kwarg→API-field mapper) + `validate_configs()`.
-- `schema.py` — loads the developer-maintained `kms_schema.json` (discovery + tag-ID cache).
+  Honors `useCountDAL` (count-only), `facet` (buckets), and `find_query._id` (`$in`/string/`$ne`);
+  docs carry a synthetic `tags` field so related/population demos work.
+- `configs.py` — `build_configs()` (pure kwarg→API-field mapper, with `extra=` passthrough for
+  facet/useCountDAL/population) + `validate_configs()` + `tag_filter()` / `date_range_filter()` helpers.
+- `schema.py` — loads the developer-maintained `kms_schema.json` (discovery + tag-ID cache);
+  `extract_doc_tag_ids()` (best-effort, for `related_documents`).
 - `settings.py` — `Settings.from_env()`; auto-mock when creds absent.
 - `errors.py` — `KmsError` / `KmsConfigError` / `KmsApiError` / `KmsAuthError`.
 
@@ -62,3 +69,9 @@ uv run mcp dev src/dots_kms_mcp/server.py    # open the MCP Inspector
 `pytest` + `pytest-asyncio` (`asyncio_mode=auto`) + `respx` (httpx mock). All tests run without
 live credentials. When changing the client/configs, keep the double-stringify and error-parsing
 tests passing; when adding a tool, add it to `EXPECTED_TOOLS` in `tests/test_server_tools.py`.
+
+## Git / commits
+
+- **Do NOT add co-author credits** (no `Co-Authored-By` trailer) to commits in this repo.
+- `.env`, `kms_schema.json`, and `tmp/` are gitignored — never commit secrets or local scratch
+  (e.g. `tmp/mcp-explainer.html`).

@@ -65,6 +65,25 @@ def build_configs(
     return configs
 
 
+def tag_filter(tag_type: str, tag_ids: list[str]) -> dict[str, Any]:
+    """Build a `tagType` activeFilter entry matching documents tagged with any of
+    ``tag_ids`` under ``tag_type``. Shared by search_by_tag_name and compare_regions.
+    """
+    return {"target": {"filterType": "tagType", "tagType": tag_type}, "values": list(tag_ids)}
+
+
+def date_range_filter(
+    path: str, start: str | None = None, end: str | None = None
+) -> dict[str, Any]:
+    """Build a `dateRangeType` activeFilter on ``path`` (ISO-8601 ``start``/``end``)."""
+    bounds: dict[str, Any] = {}
+    if start:
+        bounds["start"] = start
+    if end:
+        bounds["end"] = end
+    return {"target": {"filterType": "dateRangeType", "path": path}, "values": [bounds]}
+
+
 def validate_configs(configs: dict[str, Any]) -> None:
     """Enforce the content-vs-profile invariant, mirroring the API's 400s.
 

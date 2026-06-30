@@ -144,18 +144,43 @@ claude mcp add dots-kms -e KMS_MOCK=1 -- \
 
 (Swap `-e KMS_MOCK=1` for `-e KMS_AUTH_TOKEN=... -e KMS_TENANT=...` to go live.)
 
-## Tools & resources
+## Tools, prompts & resources
+
+Exercises all three MCP primitives: **Tools** (model-called), **Prompts** (user-triggered
+slash commands), and **Resources** (host-loaded context).
+
+### Tools
 
 | Name | What it does |
 |------|--------------|
 | `search_knowledge` | The workhorse: query content **or** profiles with search, filters, sort, projection, pagination. |
 | `get_document` | Fetch one document by `_id` within a content/profile type. |
-| `list_content_types` | List queryable content types (from `kms_schema.json`). |
-| `list_profile_types` | List queryable profile types. |
-| `list_tag_types` | List tag types + any cached name→ObjectId mappings. |
+| `get_documents` | Batch-fetch several documents by `_id` (optionally expanding references / joins). |
+| `count_only` | Just the total count for a query (cheap; uses the API's optimized count mode). |
+| `facet_counts` | Counts grouped by a field/tag (e.g. articles per category) — no documents fetched. |
+| `collect` | Auto-paginate up to N results in one call (for "a bunch" / "representative sample"; capped at 200). |
+| `search_by_tag_name` | Search filtered by a tag **name** in one step (resolves the id for you). |
+| `related_documents` | Find documents sharing a given document's tags. |
+| `compare_regions` | Pull symmetric, comparable samples for two regions (the cross-synthesis recipe, as code). |
+| `list_content_types` / `list_profile_types` / `list_tag_types` | Discovery from `kms_schema.json`. |
 | `resolve_tag` | Turn a tag name ("Karnataka") into its ObjectId (cache first; speculative live fallback). |
 | `query_getdata` | Raw escape hatch: run any `configs` object (population/joins, facet, aggregation, …). |
-| `kms://schema` *(resource)* | The full discovery schema as a resource. |
+
+### Prompts (slash commands — `/mcp__dots-kms__<name>` in Claude Code)
+
+| Name | What it does |
+|------|--------------|
+| `kms_compare(region_a, region_b, period?)` | Recipe: resolve both regions, pull samples, cross-synthesize with citations. |
+| `kms_research(topic, content_types?)` | Recipe: search + broaden + paginate → a cited research brief. |
+| `kms_brief(content_type)` | Recipe: count + facet + recent items → an overview digest. |
+
+### Resources
+
+| URI | What it is |
+|-----|------------|
+| `kms://schema` | The full discovery schema (static). |
+| `kms://content-type/{content_type}` | A content type's schema entry + a recent sample (templated). |
+| `kms://recent/{content_type}` | The latest items of a content type (templated). |
 
 ## Testing
 
@@ -165,7 +190,9 @@ uv run pytest
 
 Covers the configs builder, the **double-stringify on the wire** (via `respx`),
 error/auth parsing, the mock client (pagination, search, determinism), settings
-resolution, and tool registration. No live credentials required.
+resolution, the group A/B tools (count/facet, `collect` pagination & capping,
+tag-name search, region compare, batch/related fetch), and prompt/resource
+registration. 52 tests, no live credentials required.
 
 ## Security
 

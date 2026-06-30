@@ -18,6 +18,15 @@ EXPECTED_TOOLS = {
     "list_tag_types",
     "resolve_tag",
     "query_getdata",
+    # group A — retrieval power
+    "count_only",
+    "facet_counts",
+    "get_documents",
+    "collect",
+    # group B — friction-reducers & composite
+    "search_by_tag_name",
+    "related_documents",
+    "compare_regions",
 }
 
 
