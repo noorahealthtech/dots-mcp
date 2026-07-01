@@ -843,9 +843,10 @@ def main() -> None:
     if _settings.is_http:
         where = f"http://{_settings.host}:{_settings.port}/mcp"
         auth_state = "OAuth ON" if _auth is not None else "NO AUTH"
+        pub_state = "published-only" if _settings.published_only else "ALL docs (incl. drafts)"
         print(
             f"[dots-kms-mcp] starting (mock={_settings.mock}) — {transport} on {where} "
-            f"[{auth_state}].",
+            f"[{auth_state}; {pub_state}].",
             file=sys.stderr,
         )
         if _auth is None:

@@ -68,6 +68,9 @@ class Settings:
     port: int = DEFAULT_PORT
     stateless_http: bool = True
     json_response: bool = True
+    # Restrict content queries to published docs (defaults on under HTTP so the public
+    # connector doesn't expose unpublished drafts on the shared service token).
+    published_only: bool = False
 
     @property
     def getdata_url(self) -> str:
@@ -115,6 +118,13 @@ class Settings:
         stateless_http = _env_bool(os.environ.get("KMS_STATELESS_HTTP")) is not False
         json_response = _env_bool(os.environ.get("KMS_JSON_RESPONSE")) is not False
 
+        # Published-only defaults ON under an HTTP transport (the public connector) and
+        # OFF under stdio (local/trusted); KMS_PUBLISHED_ONLY overrides either way.
+        explicit_pub = _env_bool(os.environ.get("KMS_PUBLISHED_ONLY"))
+        published_only = (
+            explicit_pub if explicit_pub is not None else transport in _HTTP_TRANSPORTS
+        )
+
         has_creds = bool(token and tenant)
         explicit_mock = _env_bool(os.environ.get("KMS_MOCK"))
         if explicit_mock is None:
@@ -136,6 +146,7 @@ class Settings:
             port=port,
             stateless_http=stateless_http,
             json_response=json_response,
+            published_only=published_only,
         )
         settings._warn_if_inconsistent()
         return settings

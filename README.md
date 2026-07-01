@@ -305,6 +305,11 @@ user sees that token's clearance. OAuth gates *who* can reach the server; it doe
 map to per-user KMS clearance (that's a future enhancement). Tokens the bridge issues
 are opaque and held **in memory** — a restart just forces users to re-authenticate.
 
+**Drafts are hidden by default.** Because everyone shares one token, the HTTP transport
+defaults to **published-only** (`kp_published_status == "published"`) so unpublished drafts
+(~73% of docs) aren't exposed org-wide. It applies to content queries (profiles untouched)
+and can't be overridden to reveal drafts. Set `KMS_PUBLISHED_ONLY=0` to expose everything.
+
 ## Tools, prompts & resources
 
 Exercises all three MCP primitives: **Tools** (model-called), **Prompts** (user-triggered

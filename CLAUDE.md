@@ -82,6 +82,11 @@ Deploy = Docker Compose (`docker-compose.yml` at root) behind your own nginx; se
 - **Transport is env-driven, stdio by default.** `KMS_TRANSPORT=streamable-http` serves the
   remote connector at `/mcp`; `main()` dispatches `mcp.run(transport=...)`. Adding HTTP/auth was
   **additive** — the default stdio/mock path (and the whole test suite) is unaffected.
+- **Published-only filter (remote):** `PublishedOnlyClient` (getdata_client.py) wraps the client
+  when `settings.published_only` (defaults ON under HTTP, env `KMS_PUBLISHED_ONLY`) and merges
+  `{kp_published_status: "published"}` into every `contentTypes` query's findQuery (profiles
+  untouched; hard AND so it can't be overridden to reveal drafts). Keeps the shared-token public
+  connector from exposing the ~73% draft docs. The value `"published"` is confirmed live.
 - **OAuth: Google is the IdP, not the MCP authorization server.** The MCP spec (2025-06-18)
   requires audience-bound tokens (RFC 8707) that the server validates as issued *for itself*;
   Google can't mint those, so `auth.py` runs an in-process AS that delegates *login* to Google and
