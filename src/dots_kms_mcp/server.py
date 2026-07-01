@@ -41,12 +41,18 @@ _auth = build_auth(_settings) if _settings.is_http else None
 
 _fastmcp_kwargs: dict[str, Any] = {
     "instructions": (
-        "Every document returned by these tools includes a `source_url` — a clickable link "
-        "to that document's page in the KMS web app — and, when include_attachments is set "
-        "or via document_attachments, an `attachments` list of file URLs (PDFs, images, "
-        "links). ALWAYS cite your sources: when you state something from a document, link to "
-        "its source_url (and relevant attachments) as clickable markdown links so the user "
-        "can verify it. Never invent a source_url; only use ones present in tool results."
+        "CITATIONS ARE MANDATORY. Every document returned by these tools includes a "
+        "`source_url` (a clickable link to its page in the KMS web app) and, when "
+        "include_attachments is set or via document_attachments, an `attachments` list of "
+        "file URLs. RULES you must follow in every response that uses these tools:\n"
+        "1. For EVERY document whose content you use, cite it inline as a clickable Markdown "
+        "link — [short title](source_url) — right where you use that information.\n"
+        "2. Do NOT state anything drawn from the KMS without its source_url link. An answer "
+        "that presents KMS information without citations is incomplete — add the links before "
+        "responding.\n"
+        "3. If you also reference an attachment, link it too.\n"
+        "4. Never invent or guess a source_url or attachment URL; use only the exact values "
+        "present in tool results. If a result has no source_url, say so rather than inventing one."
     ),
     # HTTP-transport settings (ignored under stdio). bind + streaming behaviour.
     "host": _settings.host,
