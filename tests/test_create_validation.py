@@ -382,6 +382,79 @@ async def test_single_tag_requires_exactly_one_item(
     assert "invalid_tag_count" in _codes(result, "tags.country")
 
 
+@pytest.mark.parametrize(
+    ("path", "collection_id", "payload"),
+    [
+        (
+            "tags.country",
+            None,
+            {
+                "data": [
+                    {"_id": TAG_ID, "display": "Bangladesh", "tagId": "bangladesh"}
+                ]
+            },
+        ),
+        ("tags.subject", "", {"data": []}),
+    ],
+)
+async def test_tag_rules_require_nonempty_collection_id(
+    complete_registry, mock_client, path, collection_id, payload
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = dict(schema.fields)
+    fields[path] = replace(fields[path], collection_id=collection_id)
+    registry = replace(
+        complete_registry,
+        content_types={"routineVisits": replace(schema, fields=fields)},
+    )
+    document = _document()
+    document["tags"] = {path.split(".")[1]: payload}
+
+    result = await validate_create_document(
+        "routineVisits", document, registry, mock_client
+    )
+
+    assert result.valid is False
+    assert result.commit_ready is False
+    assert "invalid_tag_schema" in _codes(result, path)
+    assert mock_client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("path", "cardinality"),
+    [
+        ("tags.country", None),
+        ("tags.subject", None),
+        ("tags.country", "multi"),
+        ("tags.subject", "single"),
+    ],
+)
+async def test_tag_rules_require_component_matching_cardinality(
+    complete_registry, mock_client, path, cardinality
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = dict(schema.fields)
+    fields[path] = replace(fields[path], cardinality=cardinality)
+    registry = replace(
+        complete_registry,
+        content_types={"routineVisits": replace(schema, fields=fields)},
+    )
+    collection_id = fields[path].collection_id
+    document = _document()
+    document["tags"] = {
+        path.split(".")[1]: {"collectionId": collection_id, "data": []}
+    }
+
+    result = await validate_create_document(
+        "routineVisits", document, registry, mock_client
+    )
+
+    assert result.valid is False
+    assert result.commit_ready is False
+    assert "invalid_tag_schema" in _codes(result, path)
+    assert mock_client.calls == []
+
+
 async def test_tag_collection_must_match_registry(complete_registry, mock_client):
     country = copy.deepcopy(COUNTRY_TAG)
     country["collectionId"] = "states"

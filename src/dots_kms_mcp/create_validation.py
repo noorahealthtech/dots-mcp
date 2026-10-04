@@ -207,6 +207,25 @@ def _validate_checkbox(
 
 
 def _validate_tag(path: str, value: Any, rule: FieldRule) -> list[ValidationIssue]:
+    expected_cardinality = (
+        "single" if rule.component == "TagsInputSingle" else "multi"
+    )
+    if not isinstance(rule.collection_id, str) or not rule.collection_id.strip():
+        return [
+            _issue(
+                path,
+                "invalid_tag_schema",
+                f"{rule.component} requires a non-empty registry collection_id",
+            )
+        ]
+    if rule.cardinality != expected_cardinality:
+        return [
+            _issue(
+                path,
+                "invalid_tag_schema",
+                f"{rule.component} requires {expected_cardinality} cardinality",
+            )
+        ]
     if not isinstance(value, dict) or not isinstance(value.get("data"), list):
         return [_issue(path, "invalid_tag", f"{rule.component} requires a tag object")]
     if value.get("collectionId") != rule.collection_id:
