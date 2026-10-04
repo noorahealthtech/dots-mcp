@@ -83,6 +83,10 @@ def _parse_registry(raw: Any) -> CreateSchemaRegistry:
             raise ValueError(f"{content_type}.commit_ready must be a boolean")
         if not _is_string_list(missing_contract_raw):
             raise ValueError(f"{content_type}.missing_contract must be a string array")
+        if commit_ready and missing_contract_raw:
+            raise ValueError(
+                f"{content_type}.commit_ready requires an empty missing_contract"
+            )
         if not isinstance(fields_raw, dict):
             raise ValueError(f"{content_type}.fields must be an object")
         if not isinstance(conditionals_raw, list):
@@ -99,6 +103,13 @@ def _parse_registry(raw: Any) -> CreateSchemaRegistry:
             raise ValueError(
                 f"{content_type}.main.title must be a required TitleInput"
             )
+        if commit_ready:
+            for field in fields.values():
+                if field.component in ("RadioList", "CheckboxList") and not field.options:
+                    raise ValueError(
+                        f"{content_type}.{field.path}.options must be complete "
+                        "when commit_ready"
+                    )
 
         conditionals = tuple(
             _parse_conditional(content_type, index, conditional_raw)
