@@ -455,6 +455,67 @@ async def test_tag_rules_require_component_matching_cardinality(
     assert mock_client.calls == []
 
 
+@pytest.mark.parametrize(
+    ("path", "collection_id", "cardinality"),
+    [
+        ("tags.country", None, "single"),
+        ("tags.subject", "   ", "multi"),
+        ("tags.country", "country", None),
+        ("tags.subject", "subject", None),
+        ("tags.country", "country", "multi"),
+        ("tags.subject", "subject", "single"),
+    ],
+)
+async def test_omitted_optional_tag_fields_require_complete_registry_metadata(
+    complete_registry, mock_client, path, collection_id, cardinality
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = dict(schema.fields)
+    fields[path] = replace(
+        fields[path], collection_id=collection_id, cardinality=cardinality
+    )
+    registry = replace(
+        complete_registry,
+        content_types={"routineVisits": replace(schema, fields=fields)},
+    )
+
+    result = await validate_create_document(
+        "routineVisits", _document(), registry, mock_client
+    )
+
+    assert result.valid is False
+    assert result.commit_ready is False
+    assert [(issue.path, issue.code) for issue in result.errors] == [
+        (path, "invalid_tag_schema")
+    ]
+    assert mock_client.calls == []
+
+
+async def test_supplied_tag_with_invalid_registry_metadata_reports_once(
+    complete_registry, mock_client
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = dict(schema.fields)
+    fields["tags.country"] = replace(
+        fields["tags.country"], collection_id=None, cardinality=None
+    )
+    registry = replace(
+        complete_registry,
+        content_types={"routineVisits": replace(schema, fields=fields)},
+    )
+    document = _document()
+    document["tags"] = {"country": {"data": []}}
+
+    result = await validate_create_document(
+        "routineVisits", document, registry, mock_client
+    )
+
+    assert [(issue.path, issue.code) for issue in result.errors] == [
+        ("tags.country", "invalid_tag_schema")
+    ]
+    assert mock_client.calls == []
+
+
 async def test_tag_collection_must_match_registry(complete_registry, mock_client):
     country = copy.deepcopy(COUNTRY_TAG)
     country["collectionId"] = "states"

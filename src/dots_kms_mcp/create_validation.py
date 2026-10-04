@@ -206,26 +206,26 @@ def _validate_checkbox(
     return _validate_choices(path, value, rule)
 
 
-def _validate_tag(path: str, value: Any, rule: FieldRule) -> list[ValidationIssue]:
+def _tag_schema_issue(path: str, rule: FieldRule) -> ValidationIssue | None:
     expected_cardinality = (
         "single" if rule.component == "TagsInputSingle" else "multi"
     )
     if not isinstance(rule.collection_id, str) or not rule.collection_id.strip():
-        return [
-            _issue(
-                path,
-                "invalid_tag_schema",
-                f"{rule.component} requires a non-empty registry collection_id",
-            )
-        ]
+        return _issue(
+            path,
+            "invalid_tag_schema",
+            f"{rule.component} requires a non-empty registry collection_id",
+        )
     if rule.cardinality != expected_cardinality:
-        return [
-            _issue(
-                path,
-                "invalid_tag_schema",
-                f"{rule.component} requires {expected_cardinality} cardinality",
-            )
-        ]
+        return _issue(
+            path,
+            "invalid_tag_schema",
+            f"{rule.component} requires {expected_cardinality} cardinality",
+        )
+    return None
+
+
+def _validate_tag(path: str, value: Any, rule: FieldRule) -> list[ValidationIssue]:
     if not isinstance(value, dict) or not isinstance(value.get("data"), list):
         return [_issue(path, "invalid_tag", f"{rule.component} requires a tag object")]
     if value.get("collectionId") != rule.collection_id:
@@ -461,12 +461,23 @@ async def validate_create_document(
         else:
             warnings.append(coverage_issue)
 
+    invalid_tag_paths: set[str] = set()
+    for path, rule in schema.fields.items():
+        if rule.component not in {"TagsInputSingle", "TagsInputMulti"}:
+            continue
+        issue = _tag_schema_issue(path, rule)
+        if issue is not None:
+            errors.append(issue)
+            invalid_tag_paths.add(path)
+
     values = _field_values(candidate)
     tag_references: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for path, value in values.items():
         rule = schema.fields.get(path)
         if rule is None:
             errors.append(_issue(path, "unknown_path", "Path is not writable"))
+            continue
+        if path in invalid_tag_paths:
             continue
         if not rule.writable:
             errors.append(_issue(path, "not_writable", f"{rule.component} cannot be supplied"))
