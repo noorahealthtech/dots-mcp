@@ -35,6 +35,8 @@ async def test_expected_tools_registered():
     tools = await server.mcp.list_tools()
     names = {t.name for t in tools}
     assert EXPECTED_TOOLS <= names, f"missing: {EXPECTED_TOOLS - names}"
+    assert "preview_content_creation" not in names
+    assert "create_and_publish_content" not in names
 
 
 async def test_schema_resource_registered():
