@@ -8,6 +8,9 @@ Loads a local ``.env`` (via python-dotenv) if present, then reads:
 - ``KMS_MOCK``        - force mock on/off; auto-on when creds are missing
 - ``KMS_SCHEMA_PATH`` - path to kms_schema.json (else the packaged default)
 - ``KMS_TIMEOUT``     - request timeout in seconds (default 30)
+- ``KMS_CREATE_ENABLED``       - opt in to content creation (default off)
+- ``KMS_CREATE_CONTENT_TYPES`` - comma-separated creation allowlist
+- ``KMS_CREATE_SCHEMA_PATH``   - path to the creation schema
 
 IMPORTANT: under the stdio transport, stdout is the protocol channel. Any
 diagnostics MUST go to stderr — never print() to stdout.
@@ -72,6 +75,9 @@ class Settings:
     # Restrict content queries to published docs (defaults on under HTTP so the public
     # connector doesn't expose unpublished drafts on the shared service token).
     published_only: bool = False
+    create_enabled: bool = False
+    create_content_types: tuple[str, ...] = ()
+    create_schema_path: str | None = None
 
     @property
     def getdata_url(self) -> str:
@@ -85,6 +91,16 @@ class Settings:
         """True when running under an HTTP-based (remote) transport."""
         return self.transport in _HTTP_TRANSPORTS
 
+    def validate_create_runtime(self, oauth_configured: bool) -> None:
+        if not self.create_enabled:
+            return
+        if self.transport != "streamable-http":
+            raise ValueError("Content creation requires KMS_TRANSPORT=streamable-http")
+        if not oauth_configured:
+            raise ValueError("Content creation requires configured OAuth")
+        if not self.create_content_types:
+            raise ValueError("Content creation requires a content type allowlist")
+
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> "Settings":
         if load_env_file:
@@ -96,6 +112,17 @@ class Settings:
         base_url = (os.environ.get("KMS_BASE_URL") or "").strip() or DEFAULT_BASE_URL
         web_url = (os.environ.get("KMS_WEB_URL") or "").strip() or DEFAULT_WEB_URL
         schema_path = (os.environ.get("KMS_SCHEMA_PATH") or "").strip() or None
+        create_enabled = _env_bool(os.environ.get("KMS_CREATE_ENABLED")) is True
+        create_content_types = tuple(
+            dict.fromkeys(
+                content_type
+                for value in (os.environ.get("KMS_CREATE_CONTENT_TYPES") or "").split(",")
+                if (content_type := value.strip())
+            )
+        )
+        create_schema_path = (
+            (os.environ.get("KMS_CREATE_SCHEMA_PATH") or "").strip() or None
+        )
 
         timeout_raw = (os.environ.get("KMS_TIMEOUT") or "").strip()
         try:
@@ -151,6 +178,9 @@ class Settings:
             stateless_http=stateless_http,
             json_response=json_response,
             published_only=published_only,
+            create_enabled=create_enabled,
+            create_content_types=create_content_types,
+            create_schema_path=create_schema_path,
         )
         settings._warn_if_inconsistent()
         return settings
