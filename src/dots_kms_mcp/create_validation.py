@@ -148,7 +148,7 @@ def _validate_date_range(
 
 
 def _choice_item(value: Any) -> tuple[str, str] | None:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or set(value) != {"value", "display"}:
         return None
     choice_value = value.get("value")
     display = value.get("display")
@@ -473,6 +473,9 @@ async def validate_create_document(
     values = _field_values(candidate)
     tag_references: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for path, value in values.items():
+        if path.split(".", 1)[0] not in {"main", "tags"}:
+            errors.append(_issue(path, "unknown_path", "Path is not writable"))
+            continue
         rule = schema.fields.get(path)
         if rule is None:
             errors.append(_issue(path, "unknown_path", "Path is not writable"))
@@ -517,7 +520,8 @@ async def validate_create_document(
                     )
                 )
 
-    errors.extend(await _verify_tags(tag_references, client))
+    if not errors:
+        errors.extend(await _verify_tags(tag_references, client))
     valid = not errors
     return ValidationResult(
         valid=valid,

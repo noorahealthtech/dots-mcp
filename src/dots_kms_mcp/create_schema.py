@@ -115,6 +115,14 @@ def _parse_registry(raw: Any) -> CreateSchemaRegistry:
             _parse_conditional(content_type, index, conditional_raw)
             for index, conditional_raw in enumerate(conditionals_raw)
         )
+        for conditional in conditionals:
+            _require_writable_conditional_field(
+                content_type, conditional.path, fields
+            )
+            for required_path in conditional.require:
+                _require_writable_conditional_field(
+                    content_type, required_path, fields
+                )
         content_types[content_type] = ContentCreateSchema(
             content_type=content_type,
             commit_ready=commit_ready,
@@ -129,6 +137,10 @@ def _parse_registry(raw: Any) -> CreateSchemaRegistry:
 def _parse_field(content_type: str, path: Any, raw: Any) -> FieldRule:
     if not isinstance(path, str) or not isinstance(raw, dict):
         raise ValueError(f"{content_type} field rules must map string paths to objects")
+    if not path.startswith(("main.", "tags.")):
+        raise ValueError(
+            f"{content_type}.{path} must be within main.* or tags.*"
+        )
 
     component = raw.get("component")
     required = raw.get("required")
@@ -184,6 +196,20 @@ def _parse_conditional(
     if not isinstance(path, str) or "equals" not in raw or not _is_string_list(require):
         raise ValueError(f"{prefix} requires path, equals, and a string require array")
     return ConditionalRequirement(path=path, equals=raw["equals"], require=tuple(require))
+
+
+def _require_writable_conditional_field(
+    content_type: str, path: str, fields: dict[str, FieldRule]
+) -> None:
+    field = fields.get(path)
+    if field is None:
+        raise ValueError(
+            f"{content_type} conditional path {path} must reference a configured field"
+        )
+    if not field.writable:
+        raise ValueError(
+            f"{content_type} conditional path {path} must reference a writable field"
+        )
 
 
 def _is_string_list(value: Any) -> bool:

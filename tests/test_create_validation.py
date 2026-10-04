@@ -336,6 +336,47 @@ async def test_choice_components_require_their_documented_object_shape(
     assert "invalid_choice_shape" in _codes(result, f"main.{field}")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("radio", {"value": "yes", "display": "Yes", "extra": "not allowed"}),
+        (
+            "checkbox",
+            [{"value": "first", "display": "First", "extra": "not allowed"}],
+        ),
+    ],
+)
+async def test_choice_objects_reject_extra_keys(
+    complete_registry, mock_client, field, value
+):
+    result = await validate_create_document(
+        "routineVisits", _document(**{field: value}), complete_registry, mock_client
+    )
+
+    assert result.valid is False
+    assert "invalid_choice_shape" in _codes(result, f"main.{field}")
+
+
+async def test_extra_choice_key_cannot_bypass_conditional_requirement(
+    complete_registry, mock_client
+):
+    result = await validate_create_document(
+        "routineVisits",
+        _document(
+            radio={
+                "value": "details",
+                "display": "Needs details",
+                "bypass": True,
+            }
+        ),
+        complete_registry,
+        mock_client,
+    )
+
+    assert result.valid is False
+    assert "invalid_choice_shape" in _codes(result, "main.radio")
+
+
 async def test_unconfigured_choice_values_fail_closed(
     complete_registry, mock_client
 ):

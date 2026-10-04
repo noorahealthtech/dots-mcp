@@ -26,6 +26,7 @@ ACTOR = CreateActor("google-sub-123", "writer@noorahealth.org")
 
 class RecordingClient:
     def __init__(self) -> None:
+        self.get_calls: list[dict] = []
         self.create_calls: list[tuple[str, dict]] = []
         self.created = {
             "content": {"_id": "created-123", "main": {"title": "A visit"}}
@@ -40,6 +41,7 @@ class RecordingClient:
         }
 
     async def get_data(self, configs):
+        self.get_calls.append(copy.deepcopy(configs))
         requested = configs["findQuery"]["_id"]["$in"]
         return {"data": [self.tags[item] for item in requested if item in self.tags]}
 
@@ -355,6 +357,55 @@ async def test_create_rejects_caller_supplied_meta(monkeypatch, client):
     assert events[0]["outcome"] == "failure"
 
 
+async def test_malicious_registry_cannot_authorize_meta_or_trigger_client_side_effects(
+    monkeypatch, complete_registry, client
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = dict(schema.fields)
+    fields["meta"] = FieldRule(
+        path="meta",
+        component="LinkEmbedWithInput",
+        required=False,
+        writable=True,
+    )
+    monkeypatch.setattr(
+        server,
+        "_create_registry",
+        replace(
+            complete_registry,
+            content_types={"routineVisits": replace(schema, fields=fields)},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="meta"):
+        await server.create_and_publish_content(
+            "routineVisits",
+            {
+                "main": {"title": "A visit"},
+                "meta": {
+                    "kp_contributed_by": "someone-else",
+                    "url": "https://example.test/otherwise-valid",
+                },
+                "tags": {
+                    "country": {
+                        "collectionId": "country",
+                        "data": [
+                            {
+                                "_id": TAG_ID,
+                                "display": "Bangladesh",
+                                "tagId": "bangladesh",
+                            }
+                        ],
+                    }
+                },
+            },
+            confirm_publish=True,
+        )
+
+    assert client.get_calls == []
+    assert client.create_calls == []
+
+
 def test_actor_is_resolved_from_mcp_auth_context(monkeypatch):
     identity = SimpleNamespace(email="writer@noorahealth.org")
     provider = SimpleNamespace(identity_for_subject=lambda subject: identity)
@@ -399,15 +450,18 @@ def test_actor_resolution_requires_provider_identity(monkeypatch):
 
 def _registration_subprocess_env(**overrides):
     env = os.environ.copy()
-    for name in (
-        "KMS_CREATE_ENABLED",
-        "KMS_CREATE_CONTENT_TYPES",
-        "KMS_TRANSPORT",
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_SECRET",
-    ):
-        env.pop(name, None)
-    env.update({"KMS_MOCK": "1", **overrides})
+    env.update(
+        {
+            "KMS_CREATE_ENABLED": "0",
+            "KMS_CREATE_CONTENT_TYPES": "",
+            "KMS_CREATE_SCHEMA_PATH": "",
+            "KMS_TRANSPORT": "stdio",
+            "GOOGLE_CLIENT_ID": "",
+            "GOOGLE_CLIENT_SECRET": "",
+            "KMS_MOCK": "1",
+            **overrides,
+        }
+    )
     return env
 
 

@@ -290,3 +290,86 @@ def test_ready_schema_rejects_choice_field_without_options(tmp_path, component):
 
     with pytest.raises(ValueError, match="main.choice.*options"):
         load_create_schema(path)
+
+
+def test_external_registry_rejects_system_metadata_field(tmp_path):
+    path = _write_schema(
+        tmp_path,
+        {
+            "commit_ready": True,
+            "missing_contract": [],
+            "conditional_requirements": [],
+            "fields": {
+                "main.title": {
+                    "component": "TitleInput",
+                    "required": True,
+                    "writable": True,
+                },
+                "meta.kp_contributed_by": {
+                    "component": "TextInput",
+                    "required": False,
+                    "writable": True,
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="meta.kp_contributed_by.*main.*tags"):
+        load_create_schema(path)
+
+
+@pytest.mark.parametrize(
+    ("conditional", "message"),
+    [
+        (
+            {"path": "main.missing", "equals": "yes", "require": ["main.details"]},
+            "main.missing.*configured field",
+        ),
+        (
+            {"path": "main.readOnly", "equals": "yes", "require": ["main.details"]},
+            "main.readOnly.*writable field",
+        ),
+        (
+            {"path": "main.choice", "equals": "yes", "require": ["main.missing"]},
+            "main.missing.*configured field",
+        ),
+        (
+            {"path": "main.choice", "equals": "yes", "require": ["main.readOnly"]},
+            "main.readOnly.*writable field",
+        ),
+    ],
+)
+def test_registry_rejects_invalid_conditional_paths(tmp_path, conditional, message):
+    path = _write_schema(
+        tmp_path,
+        {
+            "commit_ready": False,
+            "missing_contract": ["test"],
+            "conditional_requirements": [conditional],
+            "fields": {
+                "main.title": {
+                    "component": "TitleInput",
+                    "required": True,
+                    "writable": True,
+                },
+                "main.choice": {
+                    "component": "TextInput",
+                    "required": False,
+                    "writable": True,
+                },
+                "main.details": {
+                    "component": "TextInput",
+                    "required": False,
+                    "writable": True,
+                },
+                "main.readOnly": {
+                    "component": "StaticRichText",
+                    "required": False,
+                    "writable": False,
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_create_schema(path)

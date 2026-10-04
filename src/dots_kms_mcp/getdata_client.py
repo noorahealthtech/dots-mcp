@@ -1,6 +1,6 @@
 """Async HTTP client for KMS discovery and create-and-publish APIs.
 
-Encapsulates the two things that are easy to get wrong by hand:
+Encapsulates the three things that are easy to get wrong by hand:
 
 1. The **double-stringify**: the request body is a JSON object whose ``configs``
    field is itself the config object run through ``json.dumps`` (a JSON *string*).
