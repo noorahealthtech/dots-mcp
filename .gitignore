@@ -4,6 +4,7 @@ kms_schema.json
 
 # Local reference / scratch — not part of the project
 tmp/
+.worktrees/
 
 # Environment-specific deploy artifacts (compose, nginx, etc.) — local only
 deploy/
