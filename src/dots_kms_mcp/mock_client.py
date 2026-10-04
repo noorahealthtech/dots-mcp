@@ -12,7 +12,9 @@ randomness), so the same query always yields the same data.
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 from typing import Any
 
 from .configs import validate_configs
@@ -112,6 +114,45 @@ def _iso(day: int) -> str:
 class MockKmsClient:
     """Drop-in replacement for ``KmsClient`` that never touches the network."""
 
+    def __init__(self) -> None:
+        self._created: dict[tuple[str, str], dict[str, Any]] = {}
+        self._create_sequence = 0
+
+    async def create_and_publish(
+        self, content_type: str, document: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._create_sequence += 1
+        canonical = json.dumps(
+            document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        doc_id = _object_id(f"{content_type}:{canonical}:{self._create_sequence}")
+        timestamp = _iso(self._create_sequence)
+
+        created = copy.deepcopy(document)
+        meta = created.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            created["meta"] = meta
+        meta["kp_content_type"] = content_type
+        meta["kp_contributed_by"] = {
+            "_id": _object_id("mock-contributor"),
+            "name": "Mock Contributor",
+            "email": "mock@example.test",
+            "profileType": "nooraUsers",
+        }
+        created.update(
+            {
+                "_id": doc_id,
+                "kp_published_status": "published",
+                "kp_date_created": timestamp,
+                "kp_date_published": timestamp,
+                "createdAt": timestamp,
+                "updatedAt": timestamp,
+            }
+        )
+        self._created[(content_type, doc_id)] = created
+        return {"content": copy.deepcopy(created)}
+
     async def get_data(self, configs: dict[str, Any]) -> dict[str, Any]:
         # Behave like the real API on the content/profile invariant.
         validate_configs(configs)
@@ -122,16 +163,22 @@ class MockKmsClient:
         find_query = configs.get("findQuery") or {}
         facets = configs.get("facet")
 
+        created_docs = [
+            copy.deepcopy(doc)
+            for (type_id, _), doc in reversed(self._created.items())
+            if type_id == primary
+        ]
+        all_docs = created_docs + [
+            self._doc(primary, i, search_term) for i in range(_TOTAL)
+        ]
+
         # --- Count-only / faceting mode (useCountDAL) ---
         # count_only and facet_counts hit this branch: no documents are fetched.
         if configs.get("useCountDAL") or facets:
             if find_query:
-                n = sum(
-                    1 for i in range(_TOTAL)
-                    if _doc_matches(self._doc(primary, i, search_term), find_query)
-                )
+                n = sum(1 for doc in all_docs if _doc_matches(doc, find_query))
             else:
-                n = _TOTAL
+                n = len(all_docs)
             result: dict[str, Any] = {"count": n}
             if facets:
                 result["facets"] = self._facets(facets)
@@ -141,17 +188,26 @@ class MockKmsClient:
         # --- Fetch-by-id (get_document / get_documents) ---
         id_cond = find_query.get("_id")
         if isinstance(id_cond, str):
-            return {"data": [self._doc_for_id(primary, id_cond)], "count": 1}
+            document = self._created.get((primary, id_cond))
+            if document is None:
+                document = self._doc_for_id(primary, id_cond)
+            return {"data": [copy.deepcopy(document)], "count": 1}
         if isinstance(id_cond, dict) and "$in" in id_cond:
             ids = id_cond.get("$in") or []
-            return {"data": [self._doc_for_id(primary, i) for i in ids], "count": len(ids)}
+            documents = [
+                copy.deepcopy(
+                    self._created.get((primary, doc_id))
+                    or self._doc_for_id(primary, doc_id)
+                )
+                for doc_id in ids
+            ]
+            return {"data": documents, "count": len(documents)}
 
         # --- Normal paginated listing ---
         limit = configs.get("limit")
         skip = int(configs.get("skip") or 0)
         want_count = configs.get("countData", True)
 
-        all_docs = [self._doc(primary, i, search_term) for i in range(_TOTAL)]
         # Honor findQuery conditions: tag filters (tags.<coll>.data.<field>), the
         # {"_id": {"$ne": id}} exclusion used by related_documents, date ranges, $and/$or.
         if find_query:

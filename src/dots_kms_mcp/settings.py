@@ -25,6 +25,7 @@ DEFAULT_BASE_URL = "https://okf-be-prod-dot-ok-framework.el.r.appspot.com"
 # Web-app base for human-facing citation deep links (separate from the API host).
 DEFAULT_WEB_URL = "https://knowledge.noorahealth.org"
 GETDATA_PATH = "/api/discovery/getData"
+CREATE_AND_PUBLISH_PATH = "/api/content/createAndPublishContent"
 DEFAULT_TIMEOUT = 30.0
 
 # Transport defaults. stdio keeps Claude Desktop working unchanged; streamable-http
@@ -75,6 +76,9 @@ class Settings:
     @property
     def getdata_url(self) -> str:
         return self.base_url.rstrip("/") + GETDATA_PATH
+
+    def create_url(self, content_type: str) -> str:
+        return self.base_url.rstrip("/") + CREATE_AND_PUBLISH_PATH + "/" + content_type
 
     @property
     def is_http(self) -> bool:
