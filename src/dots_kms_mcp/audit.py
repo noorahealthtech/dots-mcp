@@ -4,16 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 
+_ERROR_SECRET_PATTERN = re.compile(
+    r"(\bbearer\s+|\bx-auth-token\s*:\s*|\b(?:access_token|client_secret|token)\s*=\s*)"
+    r"[^\s,;]+",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class CreateActor:
     subject: str
     email: str
+
+
+def _error_summary(error: str | None) -> str | None:
+    if error is None:
+        return None
+    return _ERROR_SECRET_PATTERN.sub(r"\1[REDACTED]", error)[:300]
 
 
 def emit_create_audit(
@@ -43,7 +57,7 @@ def emit_create_audit(
         ).hexdigest(),
         "content_id": content_id,
         "status_code": status_code,
-        "error": error[:300] if error is not None else None,
+        "error": _error_summary(error),
     }
     print(
         f"[dots-kms-mcp.audit] {json.dumps(event, separators=(',', ':'), ensure_ascii=False)}",

@@ -77,3 +77,54 @@ def test_failure_audit_has_bounded_error_but_no_document_token(capsys):
     assert event["error"] == "x" * 300
     assert token not in line
     assert "private content" not in line
+
+
+@pytest.mark.parametrize(
+    "error,secret,expected",
+    [
+        (
+            "Request failed: Authorization: bEaReR bearer-secret while publishing",
+            "bearer-secret",
+            "Request failed: Authorization: bEaReR [REDACTED] while publishing",
+        ),
+        (
+            "Upload failed, X-AUTH-TOKEN: header-secret, retry later",
+            "header-secret",
+            "Upload failed, X-AUTH-TOKEN: [REDACTED], retry later",
+        ),
+        (
+            "API rejected ToKeN=query-secret; request denied",
+            "query-secret",
+            "API rejected ToKeN=[REDACTED]; request denied",
+        ),
+        (
+            "Refresh failed ACCESS_TOKEN=access-secret details follow",
+            "access-secret",
+            "Refresh failed ACCESS_TOKEN=[REDACTED] details follow",
+        ),
+        (
+            "OAuth error CLIENT_SECRET=client-secret, configuration invalid",
+            "client-secret",
+            "OAuth error CLIENT_SECRET=[REDACTED], configuration invalid",
+        ),
+    ],
+)
+def test_failure_audit_redacts_secrets_from_error(
+    capsys, error, secret, expected
+):
+    emit_create_audit(
+        actor=CreateActor(subject="google-sub-123", email="writer@noorahealth.org"),
+        content_type="routineVisits",
+        title="Failed visit",
+        document={"main": {"title": "Failed visit"}},
+        outcome="failure",
+        content_id=None,
+        error=error,
+        status_code=401,
+    )
+
+    line = capsys.readouterr().err.strip()
+    prefix = "[dots-kms-mcp.audit] "
+    event = json.loads(line[len(prefix):])
+    assert secret not in line
+    assert event["error"] == expected
