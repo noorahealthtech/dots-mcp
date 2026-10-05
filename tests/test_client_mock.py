@@ -83,3 +83,95 @@ async def test_validation_still_fires():
     client = MockKmsClient()
     with pytest.raises(KmsConfigError):
         await client.get_data({})  # neither content nor profile types
+
+
+async def test_mock_created_document_can_be_read_back():
+    client = MockKmsClient()
+    created = await client.create_and_publish(
+        "routineVisits", {"main": {"title": "Mock visit"}}
+    )
+    doc_id = created["content"]["_id"]
+
+    fetched = await client.get_data(
+        {"contentTypes": ["routineVisits"], "findQuery": {"_id": doc_id}}
+    )
+
+    document = fetched["data"][0]
+    assert document["main"]["title"] == "Mock visit"
+    assert document["kp_published_status"] == "published"
+    assert document["meta"]["kp_content_type"] == "routineVisits"
+    assert document["meta"]["kp_contributed_by"]["name"] == "Mock Contributor"
+    assert document["kp_date_created"]
+    assert document["kp_date_published"]
+
+
+async def test_mock_identical_creates_get_distinct_deterministic_ids():
+    document = {
+        "main": {"title": "Mock visit", "summary": "Same content"},
+        "tags": {"country": []},
+    }
+    reordered_document = {
+        "tags": {"country": []},
+        "main": {"summary": "Same content", "title": "Mock visit"},
+    }
+    first_client = MockKmsClient()
+    second_client = MockKmsClient()
+
+    first_ids = [
+        (await first_client.create_and_publish("routineVisits", document))["content"][
+            "_id"
+        ]
+        for _ in range(2)
+    ]
+    second_ids = [
+        (
+            await second_client.create_and_publish(
+                "routineVisits", reordered_document
+            )
+        )["content"]["_id"]
+        for _ in range(2)
+    ]
+
+    assert first_ids[0] != first_ids[1]
+    assert first_ids == second_ids
+
+
+async def test_mock_created_documents_are_prepended_to_matching_listings():
+    client = MockKmsClient()
+    created = await client.create_and_publish(
+        "routineVisits", {"main": {"title": "Newest visit"}}
+    )
+
+    listing = await client.get_data(
+        {"contentTypes": ["routineVisits"], "limit": 2, "countData": True}
+    )
+
+    assert listing["data"][0]["_id"] == created["content"]["_id"]
+    assert listing["count"] == 48
+    assert listing["skip"] == 2
+
+
+async def test_mock_created_documents_are_isolated_by_content_type():
+    client = MockKmsClient()
+    created = await client.create_and_publish(
+        "routineVisits", {"main": {"title": "Mock visit"}}
+    )
+    doc_id = created["content"]["_id"]
+
+    fetched = await client.get_data(
+        {"contentTypes": ["articles"], "findQuery": {"_id": doc_id}}
+    )
+
+    assert fetched["data"][0]["meta"]["title"] != "Mock visit"
+    assert fetched["data"][0]["metadata"]["contentType"] == "articles"
+
+
+async def test_mock_create_does_not_mutate_or_retain_the_caller_document():
+    client = MockKmsClient()
+    document = {"main": {"title": "Original title"}}
+
+    created = await client.create_and_publish("routineVisits", document)
+    document["main"]["title"] = "Changed later"
+
+    assert "_id" not in document
+    assert created["content"]["main"]["title"] == "Original title"

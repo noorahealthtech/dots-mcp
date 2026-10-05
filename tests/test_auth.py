@@ -189,6 +189,10 @@ async def test_callback_allowed_identity_mints_code():
     assert ac.resource == RES                   # resource indicator preserved
     assert ac.subject == "g-sub"
     assert gstate not in p._pending             # pending consumed
+    identity = p.identity_for_subject("g-sub")
+    assert identity is not None
+    assert identity.email == "alice@noorahealth.org"
+    assert identity.email_verified is True
 
 
 async def test_callback_denied_for_wrong_domain():
@@ -206,6 +210,7 @@ async def test_callback_denied_for_wrong_domain():
     assert lq["error"] == ["access_denied"]     # redirected back with an error
     assert "code" not in lq                      # NO authorization code minted
     assert not p._codes                          # nothing stored
+    assert p.identity_for_subject("x") is None
 
 
 async def test_callback_unknown_state_is_rejected():

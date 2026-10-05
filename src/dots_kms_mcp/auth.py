@@ -171,6 +171,10 @@ class GoogleBridgeProvider:
         self._access: dict[str, AccessToken] = {}
         self._refresh: dict[str, RefreshToken] = {}
         self._pending: dict[str, _Pending] = {}
+        self._identities_by_subject: dict[str, GoogleIdentity] = {}
+
+    def identity_for_subject(self, subject: str) -> GoogleIdentity | None:
+        return self._identities_by_subject.get(subject)
 
     # --- DCR ---------------------------------------------------------------- #
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
@@ -262,6 +266,7 @@ class GoogleBridgeProvider:
                 state=pending.params.state,
             )
         our_code = _new_secret()
+        self._identities_by_subject[identity.sub] = identity
         self._codes[our_code] = AuthorizationCode(
             code=our_code,
             scopes=list(pending.params.scopes or []),

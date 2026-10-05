@@ -12,10 +12,15 @@ from __future__ import annotations
 import sys
 from typing import Any, NoReturn
 
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
+from .audit import CreateActor, emit_create_audit
 from .auth import build_auth
 from .configs import build_configs, date_query, merge_find_query, tag_query
+from .create_schema import load_create_schema
+from .create_validation import ValidationIssue, validate_create_document
 from .errors import KmsError
 from .getdata_client import build_client
 from .schema import (
@@ -90,6 +95,9 @@ if _auth is not None:
         return RedirectResponse(location, status_code=302)
 
 _client = build_client(_settings)
+_create_registry = (
+    load_create_schema(_settings.create_schema_path) if _settings.create_enabled else None
+)
 
 # Hard ceiling on how many documents `collect` will pull, to protect context size.
 MAX_COLLECT = 200
@@ -739,6 +747,193 @@ async def query_getdata(configs: dict[str, Any]) -> dict[str, Any]:
         return await _client.get_data(configs)
     except KmsError as exc:
         _raise_readable(exc)
+
+
+# --------------------------------------------------------------------------- #
+# Content creation (conditionally registered for authenticated HTTP only)
+# --------------------------------------------------------------------------- #
+def _require_create_actor() -> CreateActor:
+    """Resolve the initiating Google identity from the current MCP auth context."""
+    if _auth is None:
+        raise ValueError("Content creation is unavailable because OAuth is not configured")
+    access_token = get_access_token()
+    if access_token is None:
+        raise ValueError("Content creation requires an authenticated MCP access token")
+    subject = access_token.subject
+    if not subject:
+        raise ValueError("Content creation requires an authenticated Google subject")
+    identity = _auth.provider.identity_for_subject(subject)
+    if identity is None or not identity.email:
+        raise ValueError("The authenticated Google identity is unavailable; sign in again")
+    return CreateActor(subject=subject, email=identity.email)
+
+
+def _require_create_content_type(content_type: str) -> None:
+    if content_type not in _settings.create_content_types:
+        raise ValueError(f"{content_type} is not enabled for content creation")
+
+
+def _issue_dict(issue: ValidationIssue) -> dict[str, str]:
+    return {"path": issue.path, "code": issue.code, "message": issue.message}
+
+
+def _creation_title(document: dict[str, Any]) -> str:
+    main = document.get("main")
+    title = main.get("title") if isinstance(main, dict) else None
+    return title if isinstance(title, str) else ""
+
+
+def _validation_error(issues: tuple[ValidationIssue, ...]) -> str:
+    details = "; ".join(
+        f"{issue.path} [{issue.code}]: {issue.message}" for issue in issues
+    )
+    return f"Content creation validation failed: {details}"
+
+
+async def preview_content_creation(
+    content_type: str, document: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate a candidate before using the immediate-publication create tool.
+
+    Call this before create_and_publish_content. Preview never creates content, but the
+    corresponding create operation publishes immediately. Only registry-approved paths
+    are accepted: system metadata such as meta.kp_contributed_by cannot be overridden,
+    tags must already exist, and this server does not upload media. The returned actor is
+    the initiating Google user; DOTS contributor attribution still belongs to the shared
+    service account.
+    """
+    _require_create_content_type(content_type)
+    actor = _require_create_actor()
+    if _create_registry is None:
+        raise ValueError("Content creation registry is unavailable")
+    try:
+        validation = await validate_create_document(
+            content_type,
+            document,
+            _create_registry,
+            _client,
+            require_commit_ready=False,
+        )
+    except KmsError as exc:
+        _raise_readable(exc)
+    return {
+        "valid": validation.valid,
+        "commit_ready": validation.commit_ready,
+        "document": validation.document,
+        "errors": [_issue_dict(issue) for issue in validation.errors],
+        "warnings": [_issue_dict(issue) for issue in validation.warnings],
+        "actor": {"email": actor.email},
+        "publishes_immediately": True,
+        "publication_warning": (
+            "Creating this content publishes it immediately; preview does not create it."
+        ),
+    }
+
+
+async def create_and_publish_content(
+    content_type: str,
+    document: dict[str, Any],
+    confirm_publish: bool = False,
+) -> dict[str, Any]:
+    """Validate, create, and immediately publish one DOTS document.
+
+    Run preview_content_creation first, then pass confirm_publish=True only after the
+    user confirms immediate publication. The candidate is revalidated on every call.
+    System metadata, including meta.kp_contributed_by, cannot be overridden; only
+    existing tags may be referenced; media upload is not supported. The initiating
+    actor is resolved only from MCP Google OAuth, while DOTS attributes the content to
+    the shared service account. A failed or timed-out create must not be retried
+    automatically because the original request may have succeeded.
+    """
+    _require_create_content_type(content_type)
+    if not confirm_publish:
+        raise ValueError(
+            "Immediate publication requires confirm_publish=True after a successful preview"
+        )
+    actor = _require_create_actor()
+    if _create_registry is None:
+        raise ValueError("Content creation registry is unavailable")
+
+    audit_document = document
+    try:
+        validation = await validate_create_document(
+            content_type,
+            document,
+            _create_registry,
+            _client,
+            require_commit_ready=True,
+        )
+        audit_document = validation.document
+        if not validation.valid:
+            error = _validation_error(validation.errors)
+            emit_create_audit(
+                actor=actor,
+                content_type=content_type,
+                title=_creation_title(audit_document),
+                document=audit_document,
+                outcome="failure",
+                content_id=None,
+                error=error,
+                status_code=None,
+            )
+            raise ValueError(error)
+
+        result = await _client.create_and_publish(content_type, validation.document)
+    except KmsError as exc:
+        emit_create_audit(
+            actor=actor,
+            content_type=content_type,
+            title=_creation_title(audit_document),
+            document=audit_document,
+            outcome="failure",
+            content_id=None,
+            error=getattr(exc, "detail", None) or str(exc),
+            status_code=getattr(exc, "status_code", None),
+        )
+        _raise_readable(exc)
+
+    content = result["content"]
+    _annotate(content, content_type)
+    content_id = content.get("_id")
+    emit_create_audit(
+        actor=actor,
+        content_type=content_type,
+        title=_creation_title(validation.document),
+        document=validation.document,
+        outcome="success",
+        content_id=content_id if isinstance(content_id, str) else None,
+        error=None,
+        status_code=200,
+    )
+    return {
+        **result,
+        "actor": {"email": actor.email},
+        "publishes_immediately": True,
+        "attribution_warning": (
+            "The initiating Google user is recorded in the MCP audit, but DOTS "
+            "attributes the contributor to the shared service account."
+        ),
+    }
+
+
+if _settings.create_enabled:
+    _settings.validate_create_runtime(oauth_configured=_auth is not None)
+    mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        )
+    )(preview_content_creation)
+    mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        )
+    )(create_and_publish_content)
 
 
 # --------------------------------------------------------------------------- #

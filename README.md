@@ -59,6 +59,9 @@ cp .env.example .env
 | `KMS_BASE_URL`    | `https://okf-be-prod-dot-ok-framework.el.r.appspot.com` | API host; the `/api/discovery/getData` path is appended. |
 | `KMS_SCHEMA_PATH` | bundled default                        | Path to your `kms_schema.json` (see below). |
 | `KMS_TIMEOUT`     | `30`                                   | Request timeout (seconds). |
+| `KMS_CREATE_ENABLED` | `0`                                | Register the create tools. Requires authenticated Streamable HTTP. |
+| `KMS_CREATE_CONTENT_TYPES` | *(none)*                       | Required comma-separated allowlist when creation is enabled. |
+| `KMS_CREATE_SCHEMA_PATH` | packaged fail-closed registry     | Path to a reviewed, authoritative creation registry. |
 
 **Auto-mock:** with no `KMS_AUTH_TOKEN`/`KMS_TENANT`, the server logs (to stderr)
 that it's in mock mode and serves sample data. Set both vars (and optionally
@@ -310,6 +313,75 @@ defaults to **published-only** (`kp_published_status == "published"`) so unpubli
 (~73% of docs) aren't exposed org-wide. It applies to content queries (profiles untouched)
 and can't be overridden to reveal drafts. Set `KMS_PUBLISHED_ONLY=0` to expose everything.
 
+## Create and publish content
+
+Content creation is an optional, create-only capability for authenticated remote
+connectors. It is disabled by default, works only with `KMS_TRANSPORT=streamable-http`
+and configured Google OAuth, and publishes immediately. It is not available over stdio
+or unauthenticated HTTP. All connector users share the DOTS service account and its
+**60 create requests/minute** API limit.
+
+Activate it only after preparing a reviewed registry:
+
+```bash
+KMS_CREATE_ENABLED=1
+KMS_CREATE_CONTENT_TYPES=routineVisits
+KMS_CREATE_SCHEMA_PATH=/run/secrets/kms_create_schema.json
+```
+
+`KMS_CREATE_CONTENT_TYPES` is the deployment allowlist, but allowlisting alone does not
+permit a commit. The selected type must also have `commit_ready: true` in the creation
+registry. The packaged registry deliberately has every type at `commit_ready: false`
+because authoritative required-field flags, legal choice values, and conditional rules
+are missing from the DOTS metadata available to this project. Before production
+activation, the registry owner must obtain or explicitly approve that contract, maintain
+it in an external versioned registry, mark the type ready, and configure
+`KMS_CREATE_SCHEMA_PATH` to use it.
+
+Always preview the complete candidate first, review the normalized document and any
+errors or warnings, then commit that document only after the user confirms immediate
+publication:
+
+```text
+preview_content_creation(
+  content_type="routineVisits",
+  document={"main": {...}, "tags": {...}}
+)
+
+create_and_publish_content(
+  content_type="routineVisits",
+  document={"main": {...}, "tags": {...}},
+  confirm_publish=true
+)
+```
+
+Preview never creates content. Commit repeats validation and requires
+`confirm_publish=true`; the confirmation records intent but does not replace OAuth,
+the content-type allowlist, or registry readiness. Only registry-approved fields are
+accepted. Tags must already exist in DOTS. File fields may reference complete,
+previously uploaded `fileData` objects, but this server does not upload media. It also
+does not create tags or expose update, unpublish, or delete operations.
+
+Create requests are not retried automatically. A timeout or connection failure can have
+an unknown outcome, so check DOTS before trying again. A `429` error includes the API's
+`RateLimit-Reset` value when provided.
+
+Attribution has three distinct parts:
+
+- `main.author` is ordinary caller-supplied text in the content template. It does not
+  control the linked contributor shown in the DOTS page header.
+- `meta.kp_contributed_by` is server-managed DOTS metadata and cannot be supplied or
+  overridden by an MCP request. DOTS derives it from the shared service token, so the
+  linked contributor/header attribution belongs to that shared DOTS account, not the
+  Google user.
+- MCP audit provenance records the initiating Google subject and verified email, plus
+  the request hash, outcome, and returned DOTS content ID. One-line events prefixed
+  `[dots-kms-mcp.audit]` go to stderr and are visible through `docker compose logs`;
+  tokens and full document bodies are not logged.
+
+There is no MCP correction tool. Correct an incorrectly published document in the DOTS
+web app or contact DOTS support for cleanup and recovery.
+
 ## Tools, prompts & resources
 
 Exercises all three MCP primitives: **Tools** (model-called), **Prompts** (user-triggered
@@ -331,6 +403,8 @@ slash commands), and **Resources** (host-loaded context).
 | `list_content_types` / `list_profile_types` / `list_tag_types` | Discovery from `kms_schema.json`. |
 | `resolve_tag` | Turn a tag name ("Karnataka") into its ObjectId (cache first; speculative live fallback). |
 | `query_getdata` | Raw escape hatch: run any `configs` object (population/joins, facet, aggregation, …). |
+| `preview_content_creation` | Validate an allowlisted creation candidate without creating it; registered only when creation is enabled. |
+| `create_and_publish_content` | Revalidate, create, and immediately publish one candidate after explicit confirmation; registered only when creation is enabled. |
 
 ### Prompts (slash commands — `/mcp__dots-kms__<name>` in Claude Code)
 
@@ -360,7 +434,9 @@ resolution, the group A/B tools (count/facet, `collect` pagination & capping,
 tag-name search, region compare, batch/related fetch), attachments/citations, the
 **transport selection** (stdio vs streamable-http), the **OAuth bridge** (domain
 restriction, audience binding, token rotation), and prompt/resource registration. No
-live credentials required.
+live credentials required. Creation tests additionally cover the fail-closed registry,
+validation, create wire format, audit safety, preview/commit behavior, and conditional
+tool registration without calling the live create endpoint.
 
 ## Security
 
@@ -371,8 +447,10 @@ live credentials required.
   bridge restricts access to `KMS_ALLOWED_EMAIL_DOMAINS` and the server only accepts
   tokens it minted for itself (RFC 8707 audience binding). Keep secrets in a
   `chmod 600` `.env` on the VM; terminate TLS at nginx; rate-limit at the proxy. The
-  tools are **read-only** (`getData`), so the blast radius is read access of the shared
-  token. Decide whether unpublished drafts should be reachable before going live.
+  default tools are **read-only** (`getData`), so the default blast radius is read access
+  of the shared token. Enabling content creation adds an immediate-publication operation;
+  grant the shared account `PUBLISH` only for intentionally exposed content types. Decide
+  whether unpublished drafts should be reachable before going live.
 
 ## Roadmap
 
