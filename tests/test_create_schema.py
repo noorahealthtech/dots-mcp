@@ -1,8 +1,12 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from dots_kms_mcp.create_schema import load_create_schema
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 DOCUMENTED_FIELD_COMPONENTS = {
@@ -231,6 +235,21 @@ def test_packaged_registry_fails_closed_until_contract_is_complete():
     routine = registry.content_types["routineVisits"]
     assert routine.commit_ready is False
     assert "choice_options:main.visitType" in routine.missing_contract
+
+
+def test_provisional_deployment_registry_is_scoped_and_fails_closed():
+    registry = load_create_schema(str(ROOT / "kms_create_schema.json"))
+
+    assert set(registry.content_types) == {
+        "programmaticAssetsTemplates",
+        "routineVisits",
+    }
+    for content_type, schema in registry.content_types.items():
+        assert schema.commit_ready is False
+        assert schema.missing_contract
+        assert {
+            path: rule.component for path, rule in schema.fields.items()
+        } == DOCUMENTED_FIELD_COMPONENTS[content_type]
 
 
 def test_explicit_missing_schema_path_is_loud(tmp_path):

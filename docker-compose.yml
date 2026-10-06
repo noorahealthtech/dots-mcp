@@ -21,6 +21,12 @@ services:
       KMS_TRANSPORT: streamable-http
       KMS_HOST: 0.0.0.0       # inside the container; only the published port below is reachable
       KMS_PORT: "8900"
+      KMS_CREATE_ENABLED: "1"
+      KMS_CREATE_CONTENT_TYPES: programmaticAssetsTemplates,routineVisits
+      KMS_CREATE_SCHEMA_PATH: /run/secrets/kms_create_schema.json
+    volumes:
+      # Provisional and fail-closed. Edit the host file, then restart the service.
+      - "./kms_create_schema.json:/run/secrets/kms_create_schema.json:ro"
     ports:
       # Loopback only — NOT publicly exposed. Your host nginx proxies to http://127.0.0.1:8900.
       # (If nginx runs in this same compose instead, drop this and proxy to http://dots-kms-mcp:8900.)
