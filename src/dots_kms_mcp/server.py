@@ -20,7 +20,7 @@ from .audit import CreateActor, emit_create_audit
 from .auth import build_auth
 from .configs import build_configs, date_query, merge_find_query, tag_query
 from .create_schema import load_create_schema
-from .create_validation import ValidationIssue, validate_create_document
+from .create_validation import ValidationIssue, ValidationResult, validate_create_document
 from .errors import KmsError
 from .getdata_client import build_client
 from .schema import (
@@ -777,6 +777,118 @@ def _issue_dict(issue: ValidationIssue) -> dict[str, str]:
     return {"path": issue.path, "code": issue.code, "message": issue.message}
 
 
+_MODEL_RETRYABLE_CREATE_CODES = {
+    "invalid_choice_shape",
+    "invalid_date",
+    "invalid_date_range",
+    "invalid_lexical_root",
+    "invalid_link",
+    "invalid_number",
+    "invalid_rich_text",
+    "invalid_text",
+    "invalid_url",
+    "not_writable",
+    "reversed_date_range",
+    "rich_text_mismatch",
+    "tag_collection_mismatch",
+    "unknown_path",
+}
+_TECH_CONFIGURATION_CREATE_CODES = {
+    "choice_options_unconfigured",
+    "invalid_tag_schema",
+    "schema_incomplete",
+    "unknown_content_type",
+    "unsupported_component",
+}
+
+
+def _creation_support(
+    content_type: str, issues: list[ValidationIssue]
+) -> dict[str, Any]:
+    fields = sorted({issue.path for issue in issues if issue.path != "content_type"})
+    version = _create_registry.version if _create_registry is not None else "unavailable"
+    return {
+        "code": "KMS_CREATE_CONFIGURATION_REQUIRED",
+        "content_type": content_type,
+        "schema_version": version,
+        "fields": fields,
+        "issues": sorted({issue.code for issue in issues}),
+        "details": [_issue_dict(issue) for issue in issues],
+        "action": (
+            "Ask the DOTS MCP technical team to complete the creation registry "
+            "for this content type and restart the connector."
+        ),
+    }
+
+
+def _preview_resolution(
+    content_type: str, validation: ValidationResult
+) -> dict[str, Any]:
+    if not validation.valid:
+        configuration_errors = [
+            issue
+            for issue in validation.errors
+            if issue.code in _TECH_CONFIGURATION_CREATE_CODES
+        ]
+        if configuration_errors:
+            return {
+                "status": "needs_tech_configuration",
+                "model_retry_allowed": False,
+                "max_model_retries": 0,
+                "action": (
+                    "Do not retry. Share the support details with the DOTS MCP "
+                    "technical team."
+                ),
+                "support": _creation_support(content_type, configuration_errors),
+            }
+        if validation.errors and all(
+            issue.code in _MODEL_RETRYABLE_CREATE_CODES
+            for issue in validation.errors
+        ):
+            return {
+                "status": "model_retryable",
+                "model_retry_allowed": True,
+                "max_model_retries": 1,
+                "action": "Correct the listed payload formats and retry preview once.",
+                "support": None,
+            }
+        return {
+            "status": "needs_user_input",
+            "model_retry_allowed": False,
+            "max_model_retries": 0,
+            "action": (
+                "Ask the user for missing or ambiguous information; do not invent "
+                "values."
+            ),
+            "support": None,
+        }
+
+    if validation.commit_ready:
+        return {
+            "status": "ready",
+            "model_retry_allowed": False,
+            "max_model_retries": 0,
+            "action": "Preview is valid. Ask for explicit confirmation before publishing.",
+            "support": None,
+        }
+
+    configuration_warnings = [
+        issue
+        for issue in validation.warnings
+        if issue.code in _TECH_CONFIGURATION_CREATE_CODES
+    ]
+    return {
+        "status": "preview_only",
+        "model_retry_allowed": False,
+        "max_model_retries": 0,
+        "action": (
+            "Preview is valid, but publishing is disabled until the technical team "
+            "completes the creation configuration."
+        ),
+        "support": _creation_support(content_type, configuration_warnings),
+    }
+
+
 def _creation_title(document: dict[str, Any]) -> str:
     main = document.get("main")
     title = main.get("title") if isinstance(main, dict) else None
@@ -800,7 +912,10 @@ async def preview_content_creation(
     are accepted: system metadata such as meta.kp_contributed_by cannot be overridden,
     tags must already exist, and this server does not upload media. The returned actor is
     the initiating Google user; DOTS contributor attribution still belongs to the shared
-    service account.
+    service account. Follow the returned resolution exactly: retry once only when
+    model_retry_allowed is true; ask the user for needs_user_input; for
+    needs_tech_configuration, do not retry and share the support block verbatim. Never
+    invent missing facts, tags, or choice values.
     """
     _require_create_content_type(content_type)
     actor = _require_create_actor()
@@ -827,6 +942,7 @@ async def preview_content_creation(
         "publication_warning": (
             "Creating this content publishes it immediately; preview does not create it."
         ),
+        "resolution": _preview_resolution(content_type, validation),
     }
 
 

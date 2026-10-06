@@ -127,6 +127,13 @@ async def test_preview_validates_without_creating(client):
         "publication_warning": (
             "Creating this content publishes it immediately; preview does not create it."
         ),
+        "resolution": {
+            "status": "ready",
+            "model_retry_allowed": False,
+            "max_model_retries": 0,
+            "action": "Preview is valid. Ask for explicit confirmation before publishing.",
+            "support": None,
+        },
     }
     assert client.create_calls == []
 
@@ -148,6 +155,13 @@ async def test_preview_returns_exact_validation_issues():
             "message": "Required field is missing or empty",
         }
     ]
+    assert result["resolution"] == {
+        "status": "needs_user_input",
+        "model_retry_allowed": False,
+        "max_model_retries": 0,
+        "action": "Ask the user for missing or ambiguous information; do not invent values.",
+        "support": None,
+    }
 
 
 async def test_preview_reports_incomplete_schema_warning(monkeypatch, complete_registry):
@@ -174,6 +188,136 @@ async def test_preview_reports_incomplete_schema_warning(monkeypatch, complete_r
             "message": "routineVisits is not commit-ready: required_fields",
         }
     ]
+    assert result["resolution"]["status"] == "preview_only"
+    assert result["resolution"]["model_retry_allowed"] is False
+    assert result["resolution"]["support"] == {
+        "code": "KMS_CREATE_CONFIGURATION_REQUIRED",
+        "content_type": "routineVisits",
+        "schema_version": "test",
+        "fields": [],
+        "issues": ["schema_incomplete"],
+        "details": [
+            {
+                "path": "content_type",
+                "code": "schema_incomplete",
+                "message": "routineVisits is not commit-ready: required_fields",
+            }
+        ],
+        "action": (
+            "Ask the DOTS MCP technical team to complete the creation registry "
+            "for this content type and restart the connector."
+        ),
+    }
+
+
+async def test_preview_allows_one_model_retry_for_format_only_errors(
+    monkeypatch, complete_registry
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = {
+        **schema.fields,
+        "main.date": FieldRule(
+            path="main.date",
+            component="DatePicker",
+            required=False,
+            writable=True,
+        ),
+    }
+    monkeypatch.setattr(
+        server,
+        "_create_registry",
+        replace(
+            complete_registry,
+            content_types={"routineVisits": replace(schema, fields=fields)},
+        ),
+    )
+
+    result = await server.preview_content_creation(
+        "routineVisits",
+        {"main": {"title": "A visit", "date": "2026-10-06"}},
+    )
+
+    assert result["errors"][0]["code"] == "invalid_date"
+    assert result["resolution"] == {
+        "status": "model_retryable",
+        "model_retry_allowed": True,
+        "max_model_retries": 1,
+        "action": "Correct the listed payload formats and retry preview once.",
+        "support": None,
+    }
+
+
+async def test_preview_returns_copyable_support_for_registry_errors(
+    monkeypatch, complete_registry
+):
+    schema = complete_registry.content_types["routineVisits"]
+    fields = {
+        **schema.fields,
+        "main.visitType": FieldRule(
+            path="main.visitType",
+            component="CheckboxList",
+            required=False,
+            writable=True,
+            options=(),
+        ),
+    }
+    monkeypatch.setattr(
+        server,
+        "_create_registry",
+        replace(
+            complete_registry,
+            content_types={"routineVisits": replace(schema, fields=fields)},
+        ),
+    )
+
+    result = await server.preview_content_creation(
+        "routineVisits",
+        {
+            "main": {
+                "title": "Sensitive visit report",
+                "visitType": [
+                    {"value": "facilityVisit", "display": "Facility visit"}
+                ],
+            }
+        },
+    )
+
+    assert result["errors"][0]["code"] == "choice_options_unconfigured"
+    assert result["resolution"]["status"] == "needs_tech_configuration"
+    assert result["resolution"]["model_retry_allowed"] is False
+    assert result["resolution"]["support"] == {
+        "code": "KMS_CREATE_CONFIGURATION_REQUIRED",
+        "content_type": "routineVisits",
+        "schema_version": "test",
+        "fields": ["main.visitType"],
+        "issues": ["choice_options_unconfigured"],
+        "details": [
+            {
+                "path": "main.visitType",
+                "code": "choice_options_unconfigured",
+                "message": "Legal options for CheckboxList are not configured",
+            }
+        ],
+        "action": (
+            "Ask the DOTS MCP technical team to complete the creation registry "
+            "for this content type and restart the connector."
+        ),
+    }
+    assert "Sensitive visit report" not in repr(result["resolution"])
+
+
+async def test_preview_does_not_retry_an_empty_required_tag_selection():
+    result = await server.preview_content_creation(
+        "routineVisits",
+        {
+            "main": {"title": "A visit"},
+            "tags": {"country": {"collectionId": "country", "data": []}},
+        },
+    )
+
+    assert result["errors"][0]["code"] == "invalid_tag_count"
+    assert result["resolution"]["status"] == "needs_user_input"
+    assert result["resolution"]["model_retry_allowed"] is False
 
 
 async def test_preview_reports_missing_tag(client):
