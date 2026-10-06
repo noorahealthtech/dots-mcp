@@ -1,26 +1,36 @@
 {
-  "version": "provisional-2026-10-06",
+  "version": "provisional-2026-10-07",
   "content_types": {
     "programmaticAssetsTemplates": {
       "commit_ready": false,
       "missing_contract": [
-        "choice_options:main.typeOfResource",
-        "required_fields",
         "conditional_rules"
       ],
       "conditional_requirements": [],
       "fields": {
         "main.title": {"component": "TitleInput", "required": true, "writable": true},
-        "main.typeOfResource": {"component": "RadioList", "required": false, "writable": true, "options": []},
-        "tags.country": {"component": "TagsInputSingle", "required": false, "writable": true, "cardinality": "single", "collection_id": "country"},
+        "main.typeOfResource": {
+          "component": "RadioList",
+          "required": true,
+          "writable": true,
+          "options": [
+            {"value": "toolkit", "display": "Toolkit"},
+            {"value": "manual", "display": "Manual"},
+            {"value": "strategy", "display": "Strategy"},
+            {"value": "guidelines", "display": "Guidelines"},
+            {"value": "curriculum", "display": "Curriculum"},
+            {"value": "conceptNotes", "display": "Concept Notes"}
+          ]
+        },
+        "tags.country": {"component": "TagsInputSingle", "required": true, "writable": true, "cardinality": "single", "collection_id": "country"},
         "tags.states": {"component": "TagsInputSingle", "required": false, "writable": true, "cardinality": "single", "collection_id": "states"},
-        "tags.conditionAreas": {"component": "TagsInputMulti", "required": false, "writable": true, "cardinality": "multi", "collection_id": "conditionAreas"},
+        "tags.conditionAreas": {"component": "TagsInputMulti", "required": true, "writable": true, "cardinality": "multi", "collection_id": "conditionAreas"},
         "tags.stakeholder": {"component": "TagsInputMulti", "required": false, "writable": true, "cardinality": "multi", "collection_id": "stakeholder"},
         "tags.subject": {"component": "TagsInputSingle", "required": false, "writable": true, "cardinality": "single", "collection_id": "subject"},
-        "main.dateOfCompletion": {"component": "DatePicker", "required": false, "writable": true},
-        "main.subjectOfTheToolkitManualStrategyGuidelinesCurricula": {"component": "TextInput", "required": false, "writable": true},
-        "main.overview": {"component": "LexicalTextEditor", "required": false, "writable": true},
-        "main.linkToDocument": {"component": "LinkEmbedWithInput", "required": false, "writable": true},
+        "main.dateOfCompletion": {"component": "DatePicker", "required": true, "writable": true},
+        "main.subjectOfTheToolkitManualStrategyGuidelinesCurricula": {"component": "TextInput", "required": true, "writable": true},
+        "main.overview": {"component": "LexicalTextEditor", "required": true, "writable": true},
+        "main.linkToDocument": {"component": "LinkEmbedWithInput", "required": true, "writable": true},
         "main.uploadDocumentInPdfFormat": {"component": "PDFInput", "required": false, "writable": true},
         "main.images": {"component": "ImageInput", "required": false, "writable": true},
         "main.linkToVisualDocumentation": {"component": "LinkEmbedWithInput", "required": false, "writable": true}
@@ -29,15 +39,26 @@
     "routineVisits": {
       "commit_ready": false,
       "missing_contract": [
-        "choice_options:main.visitType",
-        "required_fields",
         "conditional_rules"
       ],
       "conditional_requirements": [],
       "fields": {
         "main.title": {"component": "TitleInput", "required": true, "writable": true},
         "main.date": {"component": "DatePicker", "required": true, "writable": true},
-        "main.visitType": {"component": "CheckboxList", "required": true, "writable": true, "options": []},
+        "main.visitType": {
+          "component": "CheckboxList",
+          "required": true,
+          "writable": true,
+          "options": [
+            {"value": "facilityVisit", "display": "Facility visit"},
+            {"value": "externalStakeholderMeet", "display": "External stakeholder meet"},
+            {"value": "stakeholderFacilityVisit", "display": "Stakeholder facility visit"},
+            {"value": "newLaunch", "display": "New launch"},
+            {"value": "onlineVirtualReview", "display": "Online/Virtual Review"},
+            {"value": "advocacyInitiative", "display": "Advocacy Initiative"},
+            {"value": "communityVisit", "display": "Community Visit"}
+          ]
+        },
         "main.author": {"component": "TextInput", "required": true, "writable": true},
         "tags.country": {"component": "TagsInputSingle", "required": true, "writable": true, "cardinality": "single", "collection_id": "country"},
         "tags.states": {"component": "TagsInputSingle", "required": true, "writable": true, "cardinality": "single", "collection_id": "states"},

@@ -240,6 +240,7 @@ def test_packaged_registry_fails_closed_until_contract_is_complete():
 def test_provisional_deployment_registry_is_scoped_and_fails_closed():
     registry = load_create_schema(str(ROOT / "kms_create_schema.json"))
 
+    assert registry.version == "provisional-2026-10-07"
     assert set(registry.content_types) == {
         "programmaticAssetsTemplates",
         "routineVisits",
@@ -250,6 +251,51 @@ def test_provisional_deployment_registry_is_scoped_and_fails_closed():
         assert {
             path: rule.component for path, rule in schema.fields.items()
         } == DOCUMENTED_FIELD_COMPONENTS[content_type]
+
+    programmatic = registry.content_types["programmaticAssetsTemplates"]
+    assert programmatic.missing_contract == ("conditional_rules",)
+    assert {
+        path for path, rule in programmatic.fields.items() if rule.required
+    } == {
+        "main.title",
+        "main.typeOfResource",
+        "tags.country",
+        "tags.conditionAreas",
+        "main.dateOfCompletion",
+        "main.subjectOfTheToolkitManualStrategyGuidelinesCurricula",
+        "main.overview",
+        "main.linkToDocument",
+    }
+    assert programmatic.fields["main.typeOfResource"].options == (
+        ("toolkit", "Toolkit"),
+        ("manual", "Manual"),
+        ("strategy", "Strategy"),
+        ("guidelines", "Guidelines"),
+        ("curriculum", "Curriculum"),
+        ("conceptNotes", "Concept Notes"),
+    )
+
+    routine = registry.content_types["routineVisits"]
+    assert routine.missing_contract == ("conditional_rules",)
+    assert {path for path, rule in routine.fields.items() if rule.required} == {
+        "main.title",
+        "main.date",
+        "main.visitType",
+        "main.author",
+        "tags.country",
+        "tags.states",
+        "tags.districts",
+        "tags.stakeholder",
+    }
+    assert routine.fields["main.visitType"].options == (
+        ("facilityVisit", "Facility visit"),
+        ("externalStakeholderMeet", "External stakeholder meet"),
+        ("stakeholderFacilityVisit", "Stakeholder facility visit"),
+        ("newLaunch", "New launch"),
+        ("onlineVirtualReview", "Online/Virtual Review"),
+        ("advocacyInitiative", "Advocacy Initiative"),
+        ("communityVisit", "Community Visit"),
+    )
 
 
 def test_explicit_missing_schema_path_is_loud(tmp_path):
